@@ -1,19 +1,19 @@
 {
-  "name": "drivosafe-tablet",
+  "name": "drivosafe-web",
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "DrivoSafe — in-cab road-intelligence assistant for bus fleets (tablet app + operator consoles)",
+  "description": "DrivoSafe web build — operator, admin and government consoles, plus a browser-runnable Drive screen",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview",
-    "test": "node --test src/domain/*.test.js"
+    "preview": "vite preview"
   },
   "dependencies": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-road-hazards": "file:vendor/react-road-hazards-0.12.0.tgz"
+    "@drivosafe/shared": "*",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-road-hazards": "file:../vendor/react-road-hazards-0.12.0.tgz"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",

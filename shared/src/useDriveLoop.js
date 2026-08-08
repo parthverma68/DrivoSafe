@@ -12,15 +12,22 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createComplianceTracker, getEventType } from 'react-road-hazards';
-import { createVehicleSimulator, simulateDetections, gearAdvice } from '../domain/telemetry.js';
-import { createDrowsinessMonitor, createDriverSimulator } from '../domain/drowsiness.js';
-import { createAlertArbiter, P } from '../domain/alerts.js';
-import { speech, chime, haptic } from '../platform/index.js';
+import { createVehicleSimulator, simulateDetections, gearAdvice } from './telemetry.js';
+import { createDrowsinessMonitor, createDriverSimulator } from './drowsiness.js';
+import { createAlertArbiter, P } from './alerts.js';
 
 const TICK_MS = 100;      // 10 Hz
 const PUBLISH_MS = 200;   // 5 Hz
 
-export function useDriveLoop({ route, bus, driver, running, timeScale, fatigueDial, compliant, localHour }) {
+export function useDriveLoop({
+  route, bus, driver, running, timeScale, fatigueDial, compliant, localHour,
+  /* Output adapters, injected rather than imported. This hook is shared
+   * verbatim between the web and React Native builds, so it must not know
+   * which one it is running in: web passes SpeechSynthesis + WebAudio +
+   * navigator.vibrate, native passes expo-speech + expo-av + expo-haptics. */
+  platform,
+}) {
+  const io = platform || {};
   const [published, setPublished] = useState(() => emptyState());
   const [celebrate, setCelebrate] = useState(null);
 
@@ -32,9 +39,9 @@ export function useDriveLoop({ route, bus, driver, running, timeScale, fatigueDi
    * corridor is a new trip, and carrying compliance state across would be wrong. */
   const runtime = useMemo(() => {
     const arbiter = createAlertArbiter({
-      speak: (t, p) => speech.speak(t, p),
-      chime,
-      haptic,
+      speak: (t, p) => io.speak && io.speak(t, p),
+      chime: (p) => io.chime && io.chime(p),
+      haptic: (p) => io.haptic && io.haptic(p),
     });
     const dms = createDrowsinessMonitor({
       hasCamera: bus ? bus.dmsCamera !== false : true,

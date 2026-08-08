@@ -115,13 +115,17 @@ The tablet ships as **React Native**; the consoles ship as **React web**. Rather
 two products, the codebase is split at a **platform adapter boundary**:
 
 ```
-src/domain/     pure JS — no React, no DOM, no RN.  Shared 100%.
-                route model, advisory, compliance, drowsiness fusion,
-                gear advisory, alert arbitration, tile-layout algebra
-src/platform/   thin adapters with one implementation per platform:
-                geolocation · speech · storage · camera · haptics
-src/components/ React components — shared where they are pure presentational,
-                forked where layout primitives differ
+shared/         @drivosafe/shared — pure JS, no DOM and no React Native.
+                Shared byte-identically by both builds: route model, advisory,
+                compliance, drowsiness fusion, gear advisory, alert
+                arbitration, tile-layout algebra, and the DRIVE LOOP itself
+app/            React web    — the consoles, plus a browser-runnable Drive screen
+native/         React Native — the in-cab tablet app (bare RN CLI, Android target)
+
+  */src/platform/    the ONLY forked layer: one implementation per host —
+                     geolocation · speech · storage · chime · haptics
+  */src/components/  same props, same data flow, different host primitives
+                     (<div> vs <View>, CSS vs StyleSheet, SVG vs react-native-svg)
 ```
 
 `react-road-hazards` is built the same way and is the reason this works: its `computeFrame()`
@@ -129,10 +133,20 @@ core is renderer-agnostic and returns plain batched line segments, with a `<canv
 web and a Skia renderer for React Native, selected automatically by Metro via the package's
 `react-native` entry field. **The HUD looks and behaves identically on both, from one import.**
 
-**This repository delivers the React (web) build.** It is the reference implementation, it is
-what runs in the consoles, and it runs on the tablet today inside a kiosk WebView. The React
-Native port is a swap of `src/platform/*` plus the Skia renderer the library already provides —
-`src/domain/` moves across unmodified. §20 sequences it.
+**Both builds are delivered.** The split is enforced structurally rather than by convention:
+`@drivosafe/shared` cannot reach a host API, because neither host is a dependency of it. The one
+place that had teeth was the drive loop — it needs to speak, chime and buzz — so its platform
+surface is **injected** (`useDriveLoop({ platform })`) rather than imported. Each app passes a
+`driveIO` of the same shape, and the most intricate logic in the product is written exactly once.
+
+The boundary is verified mechanically, not by inspection: the production Android bundle contains
+the Skia renderer and **zero** lines of the `<canvas>` renderer, and the shared test suite runs
+under plain Node with neither host installed.
+
+> **Why bare React Native and not Expo.** The in-cab unit is a device-owner kiosk appliance
+> (§17): it needs a custom `AndroidManifest`, HOME-category launcher intent, MDM enrolment, and
+> eventually native modules for the OBD-II dongle and the NIR camera pipeline. That is
+> bare-workflow territory, and starting there avoids an eject later.
 
 ---
 
@@ -1114,7 +1128,7 @@ per hour is a regression regardless of what else it improves.
 | **4** | DMS: pipeline, fusion, escalation, arbiter | Highest safety value, highest tuning cost — needs real road data early |
 | **5** | Route Editor | Unblocks corridor authoring at scale |
 | **6** | Admin + Fleet + Government consoles | Commercial surfaces; can lag the vehicle |
-| **7** | React Native port | Swap `src/platform/*`, adopt the Skia renderer; `src/domain/*` moves unchanged (§3.1) |
+| **7** | React Native tablet build | **Delivered.** Bare RN CLI, Skia HUD, native platform adapters; `@drivosafe/shared` moved across unmodified (§3.1) |
 
 DMS lands at phase 4 rather than later specifically because its false-alarm rate can only be
 tuned against real road data, and that tuning is the long pole. Building it late means shipping

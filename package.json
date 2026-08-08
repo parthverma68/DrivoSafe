@@ -1,0 +1,13 @@
+{
+  "name": "drivosafe",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DrivoSafe — in-cab road-intelligence assistant for bus fleets",
+  "workspaces": ["shared", "app", "native"],
+  "scripts": {
+    "test": "npm run test --workspace @drivosafe/shared",
+    "web": "npm run dev --workspace drivosafe-web",
+    "web:build": "npm run build --workspace drivosafe-web",
+    "native": "npm run start --workspace drivosafe-native"
+  }
+}

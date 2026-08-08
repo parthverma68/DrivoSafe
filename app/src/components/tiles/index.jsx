@@ -6,7 +6,7 @@
  */
 import React from 'react';
 import { getEventType } from 'react-road-hazards';
-import { LEVEL_META } from '../../domain/drowsiness.js';
+import { LEVEL_META } from '@drivosafe/shared';
 
 /* POI flag colours match the HUD's: petrol yellow, rest-stop green, mechanic red */
 const POI_COLOR = {

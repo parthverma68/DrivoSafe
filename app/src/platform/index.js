@@ -1,9 +1,9 @@
 /* Platform adapters — SYSTEM_DESIGN §3.1.
  *
  * The seam between shared domain logic and the host platform. These are the
- * WEB implementations. The React Native port supplies siblings with the same
- * signatures (expo-speech, expo-location, AsyncStorage, VisionCamera,
- * expo-haptics) and `src/domain/*` moves across untouched.
+ * WEB implementations; `native/src/platform/index.js` is the sibling with the
+ * same signatures (expo-speech, expo-av, expo-haptics, expo-location,
+ * AsyncStorage). @drivosafe/shared crosses between them untouched.
  */
 
 /* ---- storage: RN sibling is AsyncStorage --------------------------------- */
@@ -112,3 +112,14 @@ export function watchPosition(onFix, onError) {
   );
   return () => navigator.geolocation.clearWatch(id);
 }
+
+/* ---- drive-loop output bundle -------------------------------------------
+ * The exact surface `useDriveLoop` needs from a host platform. The native
+ * adapter exports an identically-shaped `driveIO`, which is what lets the
+ * drive loop itself live in @drivosafe/shared instead of being written twice.
+ */
+export const driveIO = {
+  speak: (text, priority) => speech.speak(text, priority),
+  chime,
+  haptic,
+};

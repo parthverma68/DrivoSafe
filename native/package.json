@@ -1,0 +1,37 @@
+{
+  "name": "drivosafe-native",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DrivoSafe in-cab tablet app — bare React Native, Skia HUD. Android is the supported target (SYSTEM_DESIGN §4.1).",
+  "scripts": {
+    "start": "react-native start",
+    "android": "react-native run-android",
+    "ios": "react-native run-ios",
+    "bundle": "react-native bundle --platform android --dev false --entry-file index.js --bundle-output build/index.android.bundle --assets-dest build"
+  },
+  "dependencies": {
+    "@drivosafe/shared": "*",
+    "@react-native-async-storage/async-storage": "^2.2.0",
+    "@react-native-community/geolocation": "^3.4.0",
+    "@shopify/react-native-skia": "^2.11.0",
+    "react": "19.2.3",
+    "react-native": "0.86.2",
+    "react-native-safe-area-context": "^5.5.2",
+    "react-native-svg": "^15.14.0",
+    "react-native-tts": "^4.1.1",
+    "react-road-hazards": "file:../vendor/react-road-hazards-0.12.0.tgz"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.2",
+    "@babel/preset-env": "^7.25.3",
+    "@babel/runtime": "^7.25.0",
+    "@react-native-community/cli": "20.1.0",
+    "@react-native-community/cli-platform-android": "20.1.0",
+    "@react-native-community/cli-platform-ios": "20.1.0",
+    "@react-native/babel-preset": "0.86.2",
+    "@react-native/metro-config": "0.86.2"
+  },
+  "engines": {
+    "node": ">= 22.11.0"
+  }
+}

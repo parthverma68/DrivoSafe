@@ -1,6 +1,7 @@
 node_modules/
 dist/
 build/
+native/build/
 *.local
 *.log
 .DS_Store
@@ -9,3 +10,16 @@ build/
 !.env.example
 .vscode/
 .idea/
+
+# Android
+native/android/.gradle/
+native/android/app/build/
+native/android/build/
+native/android/local.properties
+*.keystore
+!debug.keystore
+
+# iOS
+native/ios/Pods/
+native/ios/build/
+native/ios/*.xcworkspace/xcuserdata/

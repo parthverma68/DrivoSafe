@@ -7,12 +7,8 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { RoadHazardView, ULTRA_QUALITY, HIGH_QUALITY, EXTREME_QUALITY } from 'react-road-hazards';
-import { CORRIDOR_DEFS, getRoute } from '../domain/corridors.js';
-import { ACTIVE_SHIFT, BUSES, DRIVERS, byId } from '../domain/fleet.js';
-import { DEFAULT_LAYOUT, validate } from '../domain/layout.js';
-import { LEVEL_META } from '../domain/drowsiness.js';
-import { useDriveLoop } from '../hooks/useDriveLoop.js';
-import { storage } from '../platform/index.js';
+import { CORRIDOR_DEFS, getRoute, ACTIVE_SHIFT, BUSES, DRIVERS, byId, DEFAULT_LAYOUT, validate, LEVEL_META, useDriveLoop } from '@drivosafe/shared';
+import { storage, driveIO } from '../platform/index.js';
 import TileGrid from '../components/TileGrid.jsx';
 
 const QUALITY = { HIGH: HIGH_QUALITY, ULTRA: ULTRA_QUALITY, EXTREME: EXTREME_QUALITY };
@@ -42,6 +38,7 @@ export default function DriveScreen() {
 
   const { state, celebrate, onDriveInfo, actions } = useDriveLoop({
     route, bus, driver, running, timeScale, fatigueDial, compliant, localHour,
+    platform: driveIO,
   });
 
   /* §11.2 safety rule: the grid is read-only in motion. The edit affordance is

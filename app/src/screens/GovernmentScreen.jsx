@@ -6,7 +6,7 @@
  */
 import React, { useMemo, useState } from 'react';
 import { getEventType } from 'react-road-hazards';
-import { CORRIDOR_DEFS, getRoute } from '../domain/corridors.js';
+import { CORRIDOR_DEFS, getRoute } from '@drivosafe/shared';
 
 export default function GovernmentScreen() {
   const [routeId, setRouteId] = useState(CORRIDOR_DEFS[0].id);

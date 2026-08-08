@@ -6,10 +6,7 @@
  * file is only the interaction.
  */
 import React, { useState } from 'react';
-import {
-  GRID, ANCHOR, TILE_TYPES, freeSlots, trayTypes,
-  swapTiles, moveTile, addTile, removeTile,
-} from '../domain/layout.js';
+import { GRID, ANCHOR, TILE_TYPES, freeSlots, trayTypes, swapTiles, moveTile, addTile, removeTile } from '@drivosafe/shared';
 import { TILE_COMPONENTS } from './tiles/index.jsx';
 
 export default function TileGrid({ layout, setLayout, editing, state, route, onBreak, hud }) {

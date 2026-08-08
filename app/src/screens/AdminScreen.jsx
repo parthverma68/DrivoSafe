@@ -2,9 +2,7 @@
  * Onboarding · fleet summaries · driver profiles · fatigue review.
  */
 import React, { useState } from 'react';
-import { OPERATORS, BUSES, DRIVERS, PARTNERS, byId, forOperator } from '../domain/fleet.js';
-import { CORRIDOR_DEFS } from '../domain/corridors.js';
-import { LEVEL_META } from '../domain/drowsiness.js';
+import { OPERATORS, BUSES, DRIVERS, PARTNERS, byId, forOperator, CORRIDOR_DEFS, LEVEL_META } from '@drivosafe/shared';
 
 const TABS = [
   { id: 'onboarding', label: 'Onboarding' },

@@ -10,8 +10,7 @@ import {
   RoadHazardView, buildRouteEvents, createRoute, buildPath, matchToPath,
   EVENT_TYPES, ULTRA_QUALITY,
 } from 'react-road-hazards';
-import { makeSampleScan } from '../domain/sampleScan.js';
-import { CORRIDOR_DEFS, registerCorridor } from '../domain/corridors.js';
+import { makeSampleScan, CORRIDOR_DEFS, registerCorridor } from '@drivosafe/shared';
 
 const MAPW = 900, MAPH = 300, PAD = 30;
 const TONE_HEX = { danger: '#ff5c60', warn: '#ffbe50', accent: '#46e6aa', neutral: '#6b7a85' };

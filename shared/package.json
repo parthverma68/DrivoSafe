@@ -1,0 +1,22 @@
+{
+  "name": "@drivosafe/shared",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DrivoSafe shared domain — pure JS, no DOM and no React Native. Consumed identically by the web build and the tablet build.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./*": "./src/*"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "test": "node --test src/*.test.js"
+  },
+  "dependencies": {
+    "react-road-hazards": "file:../vendor/react-road-hazards-0.12.0.tgz"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  }
+}

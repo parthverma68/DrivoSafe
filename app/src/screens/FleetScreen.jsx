@@ -2,8 +2,7 @@
  * One operator's health on one corridor.
  */
 import React, { useMemo, useState } from 'react';
-import { OPERATORS, DRIVERS, forOperator } from '../domain/fleet.js';
-import { CORRIDOR_DEFS, getRoute } from '../domain/corridors.js';
+import { OPERATORS, DRIVERS, forOperator, CORRIDOR_DEFS, getRoute } from '@drivosafe/shared';
 
 export default function FleetScreen() {
   const [operatorId, setOperatorId] = useState(OPERATORS[0].id);

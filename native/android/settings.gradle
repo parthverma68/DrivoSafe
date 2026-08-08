@@ -1,6 +1,68 @@
-pluginManagement { includeBuild("../node_modules/@react-native/gradle-plugin") }
+/* Monorepo-safe module resolution.
+ *
+ * The stock React Native template hardcodes
+ * `../node_modules/@react-native/gradle-plugin`. That is wrong in this repo:
+ * npm workspaces hoist most packages to the repo root, so the plugin lives in
+ * `<root>/node_modules` while `react-native` itself stays in
+ * `native/node_modules` (it is version-pinned). The template path fails at
+ * settings evaluation with "Included build does not exist".
+ *
+ * Walking up from this directory until a `node_modules/<pkg>` appears is the
+ * same lookup Node performs, needs no external process, and keeps working if
+ * npm's hoisting decisions change.
+ *
+ * `pluginManagement` must be the first statement in a settings script, so the
+ * search is inlined here and re-declared as a helper below for reuse.
+ */
+pluginManagement {
+    def dir = rootDir
+    def found = null
+    while (dir != null && found == null) {
+        def candidate = new File(dir, "node_modules/@react-native/gradle-plugin")
+        if (candidate.isDirectory()) found = candidate
+        dir = dir.parentFile
+    }
+    if (found == null) {
+        throw new GradleException(
+            "@react-native/gradle-plugin not found above ${rootDir}. Run `npm install` at the repo root."
+        )
+    }
+    // NB: PluginManagementSpec.includeBuild takes a String. Passing a File
+    // silently falls through to Settings.includeBuild, which registers an
+    // ordinary included build that contributes no plugins — and the failure
+    // surfaces later as a confusing "plugin not found".
+    includeBuild(found.absolutePath)
+}
+
 plugins { id("com.facebook.react.settings") }
-extensions.configure(com.facebook.react.ReactSettingsExtension){ ex -> ex.autolinkLibrariesFromCommand() }
+
+def resolvePackage = { String pkg ->
+    def dir = rootDir
+    while (dir != null) {
+        def candidate = new File(dir, "node_modules/${pkg}")
+        if (candidate.isDirectory()) return candidate
+        dir = dir.parentFile
+    }
+    throw new GradleException("${pkg} not found above ${rootDir}. Run `npm install` at the repo root.")
+}
+
+extensions.configure(com.facebook.react.ReactSettingsExtension) { ex ->
+    ex.autolinkLibrariesFromCommand()
+}
+
 rootProject.name = 'DrivoSafe'
 include ':app'
-includeBuild('../node_modules/@react-native/gradle-plugin')
+
+/* The template includes the plugin build TWICE, and both are load-bearing: the
+ * `pluginManagement` one above supplies the `com.facebook.react.settings`
+ * settings plugin, while this one performs dependency substitution for the
+ * versionless `com.facebook.react:react-native-gradle-plugin` on the root
+ * project's buildscript classpath. Drop it and the build fails much later with
+ * "Could not find com.facebook.react:react-native-gradle-plugin:".
+ * Settings.includeBuild does accept a File, unlike its pluginManagement
+ * namesake. */
+includeBuild(resolvePackage('@react-native/gradle-plugin'))
+
+// consumed by app/build.gradle's `react {}` block
+gradle.ext.reactNativeDir = resolvePackage('react-native')
+gradle.ext.reactNativeCodegenDir = resolvePackage('@react-native/codegen')

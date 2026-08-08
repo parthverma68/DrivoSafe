@@ -58,10 +58,15 @@ npm run web:build
 
 ### The tablet app (bare React Native)
 
+Needs **JDK 17** (not 21) and the Android SDK — full setup, monorepo notes and troubleshooting
+in **[`native/BUILDING.md`](native/BUILDING.md)**.
+
 ```bash
+npm install          # from the REPO ROOT — it is a workspace
+
 cd native
-npm run android      # device or emulator, Android 11+ (API 30+)
-npm run bundle       # production JS bundle — no device or SDK needed
+npm run android      # build, install and launch on a device or tablet emulator
+npm run bundle       # production JS bundle only — no SDK or device needed
 ```
 
 Bare RN CLI rather than Expo, deliberately: the in-cab unit is a device-owner kiosk appliance

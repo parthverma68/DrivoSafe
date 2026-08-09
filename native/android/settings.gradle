@@ -66,3 +66,9 @@ includeBuild(resolvePackage('@react-native/gradle-plugin'))
 // consumed by app/build.gradle's `react {}` block
 gradle.ext.reactNativeDir = resolvePackage('react-native')
 gradle.ext.reactNativeCodegenDir = resolvePackage('@react-native/codegen')
+// react.root (set to native/ in app/build.gradle, since react-native itself is
+// pinned there) is where the RN gradle plugin looks for hermes-compiler's
+// prebuilt hermesc binary — but hermes-compiler hoists to the repo root, so
+// that lookup always misses. Resolved here and consumed as an explicit
+// react.hermesCommand override in app/build.gradle.
+gradle.ext.hermesCompilerDir = resolvePackage('hermes-compiler')

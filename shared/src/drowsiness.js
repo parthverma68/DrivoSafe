@@ -333,6 +333,7 @@ export function createDrowsinessMonitor(cfg) {
       acknowledgedAt: null,
     };
     events.push(ev);
+    if (events.length > 50) events.splice(0, events.length - 50);
     onLevel(level, ev);
   }
 

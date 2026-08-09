@@ -209,6 +209,10 @@ export function useDriveLoop({
       while (pendingFatigue.current.length) {
         S.fatigueEvents.push(pendingFatigue.current.shift().ev);
       }
+      // only the last 6 / 20 are ever published (below) — drop the rest so a
+      // long, sped-up trip doesn't grow these without bound
+      if (S.results.length > 6) S.results.splice(0, S.results.length - 6);
+      if (S.fatigueEvents.length > 20) S.fatigueEvents.splice(0, S.fatigueEvents.length - 20);
 
       const score = runtime.tracker.score();
       const dms = S.dms || emptyState().drowsiness;

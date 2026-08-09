@@ -21,6 +21,15 @@ react {
     codegenDir = gradle.ext.reactNativeCodegenDir
     cliFile = new File(gradle.ext.reactNativeDir, "cli.js")
 
+    /* hermes-compiler hoists to the repo root, not native/ (react.root above),
+     * so the plugin's own relative lookup for the prebuilt hermesc binary
+     * always misses — only matters for release builds, which precompile the
+     * JS bundle to Hermes bytecode at build time. */
+    def os = org.gradle.internal.os.OperatingSystem.current()
+    def hermesOsBin = os.isWindows() ? "win64-bin" : os.isMacOsX() ? "osx-bin" : "linux64-bin"
+    def hermesBinName = os.isWindows() ? "hermesc.exe" : "hermesc"
+    hermesCommand = new File(gradle.ext.hermesCompilerDir, "hermesc/${hermesOsBin}/${hermesBinName}").absolutePath
+
     /* Variants */
     //   The list of variants to that are debuggable. For those we're going to
     //   skip the bundling of the JS bundle and the assets. Default is "debug", "debugOptimized".

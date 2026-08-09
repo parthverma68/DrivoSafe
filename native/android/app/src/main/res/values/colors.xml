@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- adaptive icon background: matches the deep-blue field of bg.svg
+         (see the icon source in the icon-gen scratch script for the full
+         gradient; system only needs a flat color for the mask layer) -->
+    <color name="ic_launcher_background">#153c72</color>
+</resources>

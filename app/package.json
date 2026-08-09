@@ -13,7 +13,7 @@
     "@drivosafe/shared": "*",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "react-road-hazards": "file:../vendor/react-road-hazards-0.12.0.tgz"
+    "react-road-hazards": "file:../vendor/react-road-hazards-0.12.2.tgz"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",

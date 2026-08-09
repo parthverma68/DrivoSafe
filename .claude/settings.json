@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(cmd /c \"dir gradlew.bat\")",
+      "PowerShell(cmd /c gradlew.bat --version)",
+      "PowerShell([Environment]::SetEnvironmentVariable\\(\"NoDefaultCurrentDirectoryInExePath\", \"\", \"User\"\\))",
+      "Bash(adb kill-server *)",
+      "Bash(adb start-server *)",
+      "Bash(adb devices *)"
+    ]
+  }
+}

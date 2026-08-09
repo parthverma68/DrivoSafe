@@ -4,10 +4,10 @@
 import React, { useMemo, useState } from 'react';
 import { View, Text, ScrollView } from 'react-native';
 import { OPERATORS, DRIVERS, forOperator, CORRIDOR_DEFS, getRoute } from '@drivosafe/shared';
-import { C, S, MONO } from '../theme.js';
+import { MONO, useTheme } from '../theme.js';
 import { Panel, Kpi, Table, Badge, Bar, Chip, Cycler, StatLine } from '../components/ui.jsx';
 
-const qColor = (q) => (q >= 80 ? C.ok : q >= 60 ? C.warn : q >= 35 ? '#ff8b52' : C.danger);
+const qColor = (c, q) => (q >= 80 ? c.brand : q >= 60 ? c.amber : q >= 35 ? '#ff8b52' : c.danger);
 
 const VALUE_STACK = [
   { item: 'Fuel — smoother speed profile, fewer needless decelerations', perBus: 41000 },
@@ -17,8 +17,14 @@ const VALUE_STACK = [
   { item: 'Insurance — verifiable driver-behaviour record', perBus: 9500 },
 ];
 
-export default function FleetScreen() {
-  const [operatorId, setOperatorId] = useState(OPERATORS[0].id);
+/* `scopedOperatorId` is the tenancy the signed-in account is pinned to. When it
+ * is set the operator selector is not merely hidden — there is no state to
+ * change, so this screen cannot be made to render another operator's fleet. */
+export default function FleetScreen({ scopedOperatorId = null }) {
+  const { C, S } = useTheme();
+  const [pickedOperatorId, setPickedOperatorId] = useState(OPERATORS[0].id);
+  const operatorId = scopedOperatorId || pickedOperatorId;
+  const setOperatorId = scopedOperatorId ? () => {} : setPickedOperatorId;
   const [routeId, setRouteId] = useState(CORRIDOR_DEFS[0].id);
 
   const operator = OPERATORS.find((o) => o.id === operatorId);
@@ -53,12 +59,16 @@ export default function FleetScreen() {
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 14 }}>
       <View style={[S.row, { marginBottom: 12 }]}>
         <Text style={{ fontSize: 16, fontWeight: '700', color: C.fg }}>Fleet dashboard</Text>
-        <Cycler
-          options={OPERATORS.map((o) => ({ value: o.id, label: o.name }))}
-          value={operatorId}
-          onChange={setOperatorId}
-          width={160}
-        />
+        {scopedOperatorId ? (
+          <Chip tone="ok">{operator.name} · your fleet only</Chip>
+        ) : (
+          <Cycler
+            options={OPERATORS.map((o) => ({ value: o.id, label: o.name }))}
+            value={operatorId}
+            onChange={setOperatorId}
+            width={160}
+          />
+        )}
         <Cycler
           options={CORRIDOR_DEFS.map((c) => ({ value: c.id, label: c.name }))}
           value={routeId}
@@ -93,7 +103,7 @@ export default function FleetScreen() {
                 {segments.map((s) => (
                   <View
                     key={s.m}
-                    style={{ width: 30, height: 20, borderRadius: 2, marginRight: 2, backgroundColor: qColor(s.cells[lane]) }}
+                    style={{ width: 30, height: 20, borderRadius: 2, marginRight: 2, backgroundColor: qColor(C, s.cells[lane]) }}
                   />
                 ))}
               </View>

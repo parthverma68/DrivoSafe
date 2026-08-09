@@ -13,13 +13,14 @@ import {
   EVENT_TYPES, HIGH_QUALITY,
 } from 'react-road-hazards';
 import { makeSampleScan, CORRIDOR_DEFS, registerCorridor } from '@drivosafe/shared';
-import { C, S, MONO, TONE_COLOR } from '../theme.js';
+import { MONO, TONE_COLOR, useTheme } from '../theme.js';
 import { Panel, Btn, Kpi, Table, Slider, Cycler, Chip } from '../components/ui.jsx';
 
 const MAPW = 900, MAPH = 260, PAD = 26;
-const evColor = (t) => TONE_COLOR[(EVENT_TYPES[t] || {}).tone || 'accent'] || C.ok;
+const evColor = (t) => TONE_COLOR[(EVENT_TYPES[t] || {}).tone || 'accent'] || TONE_COLOR.accent;
 
 export default function RouteEditorScreen() {
+  const { C, S } = useTheme();
   const sample = useRef(makeSampleScan()).current;
 
   const [name, setName] = useState('NH-52 Indore → Dewas (rev)');

@@ -25,8 +25,14 @@ import TileGrid from '../components/TileGrid.jsx';
  * dropping below HIGH while moving. */
 const QUALITY = { HIGH: HIGH_QUALITY, ULTRA: ULTRA_QUALITY, EXTREME: EXTREME_QUALITY };
 
-export default function DriveScreen() {
-  const [routeId, setRouteId] = useState(ACTIVE_SHIFT.routeId);
+/**
+ * `shift` binds the screen to the driver, bus and corridor the check-in gate
+ * just cleared. `mirror` is an admin watching a live cab from a console: the
+ * sensor strip goes away and the drive state is seeded from that vehicle's
+ * telemetry record instead of from local controls.
+ */
+export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, record = null }) {
+  const [routeId, setRouteId] = useState(shift.routeId);
   const [running, setRunning] = useState(true);
   const [timeScale, setTimeScale] = useState(6);
   const [fatigueDial, setFatigueDial] = useState(0.15);
@@ -35,17 +41,27 @@ export default function DriveScreen() {
   const [quality, setQuality] = useState('HIGH');
   const [localHour, setLocalHour] = useState(new Date().getHours());
 
+  /* In mirror mode the local dials are not the driver's reality — the fleet
+   * record is. Feed it in; the controls that would fight it are not rendered. */
+  useEffect(() => {
+    if (!mirror || !record) return;
+    setRouteId(record.corridorId);
+    setFatigueDial(record.fatigue.score);
+    setCompliant(record.complianceScore >= 75);
+    setRunning(record.speedKph > 3);
+  }, [mirror, record]);
+
   const route = useMemo(() => getRoute(routeId), [routeId]);
   const corridor = CORRIDOR_DEFS.find((c) => c.id === routeId);
-  const bus = byId(BUSES, ACTIVE_SHIFT.busId);
-  const driver = byId(DRIVERS, ACTIVE_SHIFT.driverId);
+  const bus = byId(BUSES, shift.busId);
+  const driver = byId(DRIVERS, shift.driverId);
 
   const [layout, setLayoutState] = useState(() =>
-    validate(storage.get('layout:' + ACTIVE_SHIFT.driverId, DEFAULT_LAYOUT))
+    validate(storage.get('layout:' + shift.driverId, DEFAULT_LAYOUT))
   );
   const setLayout = (l) => {
     setLayoutState(l);
-    storage.set('layout:' + ACTIVE_SHIFT.driverId, l);
+    storage.set('layout:' + shift.driverId, l);
   };
 
   const { state, celebrate, onDriveInfo, actions } = useDriveLoop({
@@ -114,13 +130,15 @@ export default function DriveScreen() {
         hud={hud}
       />
 
-      <SimStrip
-        {...{
-          routeId, setRouteId, running, setRunning, timeScale, setTimeScale,
-          fatigueDial, setFatigueDial, compliant, setCompliant, quality, setQuality,
-          localHour, setLocalHour, editing, setEditing, stationary, state,
-        }}
-      />
+      {mirror ? null : (
+        <SimStrip
+          {...{
+            routeId, setRouteId, running, setRunning, timeScale, setTimeScale,
+            fatigueDial, setFatigueDial, compliant, setCompliant, quality, setQuality,
+            localHour, setLocalHour, editing, setEditing, stationary, state,
+          }}
+        />
+      )}
 
       {critical ? (
         <View
@@ -141,20 +159,29 @@ export default function DriveScreen() {
             KSS {dms.kss} · PERCLOS {dms.ocular ? (dms.ocular.perclos * 100).toFixed(0) + '%' : 'n/a'} · on task{' '}
             {Math.floor(dms.timeOnTaskMin)} min
           </Text>
-          <View style={{ flexDirection: 'row', gap: 12, marginTop: 22 }}>
-            <Btn
-              onPress={actions.acknowledgeFatigue}
-              style={{ backgroundColor: '#fff', borderColor: '#fff', paddingHorizontal: 28, paddingVertical: 13 }}
-            >
-              <Text style={{ color: '#7a0420', fontWeight: '800', fontSize: 16 }}>ACKNOWLEDGE</Text>
-            </Btn>
-            <Btn
-              onPress={() => { actions.acknowledgeFatigue(); actions.takeBreak(); }}
-              style={{ backgroundColor: 'transparent', borderColor: '#fff', paddingHorizontal: 28, paddingVertical: 13 }}
-            >
-              <Text style={{ color: '#fff', fontWeight: '800', fontSize: 16 }}>LOG BREAK NOW</Text>
-            </Btn>
-          </View>
+          {/* A P0 belongs to the driver. A console watching a mirror can see it
+              fire but cannot dismiss it from a desk — only the person in the
+              seat can acknowledge (§9.3). */}
+          {mirror ? (
+            <Text style={{ fontFamily: MONO, fontSize: 12, color: '#ffd9e1', marginTop: 22, letterSpacing: 1 }}>
+              READ-ONLY MIRROR · ONLY THE DRIVER CAN ACKNOWLEDGE
+            </Text>
+          ) : (
+            <View style={{ flexDirection: 'row', gap: 12, marginTop: 22 }}>
+              <Btn
+                onPress={actions.acknowledgeFatigue}
+                style={{ backgroundColor: '#fff', borderColor: '#fff', paddingHorizontal: 28, paddingVertical: 13 }}
+              >
+                <Text style={{ color: '#7a0420', fontWeight: '800', fontSize: 16 }}>ACKNOWLEDGE</Text>
+              </Btn>
+              <Btn
+                onPress={() => { actions.acknowledgeFatigue(); actions.takeBreak(); }}
+                style={{ backgroundColor: 'transparent', borderColor: '#fff', paddingHorizontal: 28, paddingVertical: 13 }}
+              >
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 16 }}>LOG BREAK NOW</Text>
+              </Btn>
+            </View>
+          )}
         </View>
       ) : null}
     </View>

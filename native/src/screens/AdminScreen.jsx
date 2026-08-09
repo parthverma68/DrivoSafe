@@ -6,12 +6,13 @@ import { View, Text, ScrollView, TextInput, TouchableOpacity } from 'react-nativ
 import {
   OPERATORS, BUSES, DRIVERS, PARTNERS, byId, forOperator, CORRIDOR_DEFS, LEVEL_META,
 } from '@drivosafe/shared';
-import { C, S, MONO, TONE_COLOR } from '../theme.js';
+import { MONO, TONE_COLOR, useTheme } from '../theme.js';
 import { Panel, Btn, Kpi, Table, Badge, Bar, StatLine, Cycler, Chip } from '../components/ui.jsx';
 
 const TABS = ['Onboarding', 'Fleet summaries', 'Driver profiles', 'Fatigue review'];
 
 export default function AdminScreen() {
+  const { C, S } = useTheme();
   const [tab, setTab] = useState(TABS[0]);
   const [operators, setOperators] = useState(OPERATORS);
   const [buses, setBuses] = useState(BUSES);
@@ -66,6 +67,7 @@ export default function AdminScreen() {
 }
 
 function Field({ label, value, onChange, placeholder }) {
+  const { C, S } = useTheme();
   return (
     <View style={{ marginBottom: 10 }}>
       <Text style={S.label}>{label}</Text>
@@ -81,6 +83,7 @@ function Field({ label, value, onChange, placeholder }) {
 }
 
 function Onboarding({ operators, onOperator, onBus, onPartner }) {
+  const { C, S } = useTheme();
   const [op, setOp] = useState({ name: '', type: 'Passenger', corridor: 'NH-52', contact: '' });
   const [bus, setBus] = useState({
     reg: '', operatorId: operators[0] ? operators[0].id : '', model: '',
@@ -206,6 +209,7 @@ function Onboarding({ operators, onOperator, onBus, onPartner }) {
 }
 
 function Summaries({ operators, buses, partners }) {
+  const { C, S } = useTheme();
   return (
     <>
       <Panel title="Operators" hint="Compliance below 75% is flagged as a renewal risk — a fleet not acting on advisory will not renew.">
@@ -279,6 +283,7 @@ function Summaries({ operators, buses, partners }) {
 }
 
 function DriverProfiles({ operators }) {
+  const { C, S } = useTheme();
   const [opFilter, setOpFilter] = useState('');
   const list = forOperator(DRIVERS, opFilter);
   return (
@@ -340,6 +345,7 @@ const DEMO_FATIGUE = [
 ];
 
 function FatigueReview() {
+  const { C, S } = useTheme();
   return (
     <>
       <Panel

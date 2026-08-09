@@ -9,7 +9,7 @@ import { View, Text, ScrollView } from 'react-native';
 import Svg, { Polyline, Circle, Text as SvgText } from 'react-native-svg';
 import { getEventType } from 'react-road-hazards';
 import { CORRIDOR_DEFS, getRoute } from '@drivosafe/shared';
-import { C, S, MONO } from '../theme.js';
+import { MONO, useTheme } from '../theme.js';
 import { Panel, Kpi, Table, Bar, StatLine, Cycler } from '../components/ui.jsx';
 
 const OBSERVABLES = [
@@ -20,6 +20,7 @@ const OBSERVABLES = [
 ];
 
 export default function GovernmentScreen() {
+  const { C, S } = useTheme();
   const [routeId, setRouteId] = useState(CORRIDOR_DEFS[0].id);
   const corridor = CORRIDOR_DEFS.find((c) => c.id === routeId);
   const route = useMemo(() => getRoute(routeId), [routeId]);

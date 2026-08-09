@@ -82,10 +82,10 @@ pre-scanned corridors**. It does not identify passengers.
 
 | Actor | Surface | Responsibilities |
 |---|---|---|
-| **Driver** | Tablet · Drive screen | Receives advisory, is monitored for fatigue, earns Captain Score |
+| **Driver** | Tablet · Check-in → Drive screen | Clears the pre-drive gate each shift; receives advisory, is monitored for fatigue, earns Captain Score |
 | **Depot supervisor** | Web · Fleet console | Assigns buses to routes and drivers to shifts, reviews fatigue events |
-| **Fleet operator** | Web · Fleet dashboard | Fleet RQI, compliance, fuel, leaderboard |
-| **Platform admin** | Web · Admin console | Onboards operators, buses, routes, partners |
+| **Fleet operator** (owner) | Web · Fleet console | Live board for their own buses only — position, driver at the wheel, fatigue, cabin video on request; plus RQI, compliance, fuel, leaderboard |
+| **Platform admin** | Web · every surface | Onboards operators, buses, routes, partners; can mirror any cab's live drive screen |
 | **Data/ops engineer** | Web · Route Editor | Turns raw mapper scans into km-mapped events; edits and publishes corridors |
 | **Mapper crew** | Instrumented bus | Drives the corridor daily; uploads scans |
 | **Government / concessionaire** | Web · Government dashboard | Surface score, maintenance priority, deterioration |
@@ -102,10 +102,12 @@ their buses carry the LiDAR kit and run the same app in mapper mode.
 
 | Surface | Platform | Notes |
 |---|---|---|
+| **Welcome & sign-in** | Web · tablet | Role selection and authentication; the only entry point |
+| **Pre-drive check-in** | Android tablet | Vehicle recognition → driver identity → breath alcohol. Driver-only gate |
 | **Drive screen** | Android tablet, landscape, kiosk-locked | The product. Tile dashboard with the wireframe HUD anchored. |
 | **Route Editor** | Web (desktop) | Corridor authoring: waypoints, scan import, event fusion, HUD preview, publish |
 | **Admin console** | Web (desktop) | Onboarding, fleet summaries, driver profiles |
-| **Fleet dashboard** | Web (desktop) | Operator KPIs, corridor heatmap, Captain leaderboard |
+| **Fleet console** | Web (desktop) · tablet | Live operations board (position, driver, cabin video on request) + operator KPIs, corridor heatmap, Captain leaderboard |
 | **Government dashboard** | Web (desktop) | Pavement intelligence |
 | **RideScore badge** | API + embed | Passenger-facing |
 
@@ -882,11 +884,94 @@ DriverLayout { driverId,
 | Optional D4 clip | 30 days max, access-logged | §8.8, off by default |
 | Corridor scans | Indefinite | Deterioration trend is the government product |
 
+### 12.5 Identity, roles and device binding
+
+Everything above is *what* the system stores. This is *who may see it*.
+
+**Role** is a scope, not a job title. It decides which surfaces exist at all for a session, and
+the shell iterates the role's `surfaces` allow-list to decide what to construct — a surface
+outside the list is never mounted, so there is nothing to reach by guessing a URL.
+
+| Role | Home surface | Surfaces | Pre-drive gate | Tenancy |
+|---|---|---|---|---|
+| `driver` | Drive | Drive only | **yes** | own operator |
+| `operator` (fleet owner) | Fleet | Fleet only | no | own operator, enforced in the query |
+| `admin` | Fleet | Fleet · Admin · Corridors · Road Authority · Drive | no | all |
+| `gov` | Road Authority | Road Authority only | no | none — no operator, driver or vehicle identity is exposed |
+
+```
+Account   { id, role, username, secret, name, operatorId?, driverId?, jurisdiction?, … }
+Device    { serial, busId, firmware, installedAt, mount, simIccid }
+Enrolment { driverId, template, quality, enrolledAt, frames }
+```
+
+`operatorId` is the tenancy boundary and is applied where the data is *selected*, not where it is
+rendered: `scopeOf(account)` returns the operator a console is pinned to, and a fleet owner's
+live snapshot is built from that id, so another operator's vehicles are never in the array. Admin
+carries `null` and sees everything.
+
+**Device binding is the driver's whole login story.** A tablet is bolted into one bus and bound
+to it once, at fitment, by the serial printed on the case; the record survives sign-out, reboot
+and app update for the life of the vehicle. Every shift after that the *vehicle* is already known
+before anyone touches the screen, and the driver only has to prove they are the driver. One
+device maps to exactly one bus and one bus to exactly one device — a vehicle with two units would
+double-report telemetry.
+
+**Enrolment** stores a 128-float face embedding and nothing else (§8.8): no frames, ever. A
+capture is matched only against the templates enrolled for *that bus's operator*.
+
+In this build these live as seeded JSON in `shared/src/accounts.js`, which is deliberately the
+same shape the Identity Service will return from `/v1/auth/*` and `/v1/devices/*`. Secrets are
+plaintext there because there is no server to hash them on; `authenticate()` is the only place a
+credential is compared, and replacing its body with a `fetch` is the entire migration.
+
 ---
 
 ## 13. Screens
 
 Each: purpose · components · data · states · flows. Visual design is out of scope.
+
+### 13.0 Access flow — welcome, sign-in, and the pre-drive gate
+
+```
+welcome (pick a role) → sign in → [driver only: check-in gate] → the role's surfaces
+```
+
+**Welcome.** Four role cards. Picking one shapes the sign-in that follows — a driver is asked
+about a vehicle, a fleet owner is not — but it is not a security boundary: the account carries
+the role and `authenticate()` refuses a mismatch, naming the correct role rather than failing
+blankly.
+
+**Check-in gate — driver only.** Three stages between "the app is open" and "the bus can move",
+in this order, because each narrows the question the next one asks.
+
+1. **Vehicle.** The bound device serial resolves the bus with no human involved. The driver
+   confirms it, or rebinds the unit if the tablet has been moved to another vehicle.
+2. **Identity.** A front-camera burst is matched on-device against the templates enrolled for
+   that bus's operator. Three outcomes: `matched` (≥ 0.82) proceeds; `review` (0.62–0.82)
+   proceeds but flags the depot; `unknown-face` opens **registration, not refusal** — a relief
+   driver at 04:00 with a legitimate licence must be able to take the bus out, and what they
+   cannot do is skip the record. Too few frames or a dark lens is a *capture* verdict, never an
+   identity one.
+3. **Breath alcohol.** A 5–8 s blow. Fleet policy is 0.01 %BAC — tighter than the 0.03 %
+   statutory limit, because this seat carries passengers; the statutory figure is recorded
+   alongside for the incident report.
+
+   - A blow **shorter than 5 s is not an attempt.** Counting it would let a shaky first try burn
+     a third of the driver's budget for a reason that says nothing about their sobriety, and that
+     is the easiest way to make a safety device something drivers learn to route around.
+   - A blow past 8 s is **truncated, not rejected** — the cell is saturated and the extra seconds
+     carry no signal.
+   - **Three failed readings lock the vehicle.** The immobiliser stays engaged, a lock code is
+     displayed, the depot supervisor and the operator are notified with the readings, and the
+     driver cannot clear it — only a supervisor override can, and the override is itself recorded
+     in the attempt history.
+
+- **States.** `vehicle` · `identity` · `alcohol` · `cleared`; breath sub-states `idle` ·
+  `warmup` · `ready` · `blowing` · `analysing` · `pass` · `fail` · `locked`.
+- **Where it lives.** `shared/src/checkin.js` — pure, injected wall-clock, no camera and no
+  timers of its own, so the tablet and a console replaying the same shift count attempts
+  identically. Covered by `checkin.test.js`.
 
 ### 13.1 Drive screen — tablet, the product
 
@@ -941,11 +1026,29 @@ recommendations).
 
 States: `idle` · `invalid` · `submitting` · `success` · `error`; tables `loaded` · `empty`.
 
-### 13.4 Fleet dashboard — web
+### 13.4 Fleet console — web and tablet
 
-KPI row (fleet RQI, advisory compliance %, fuel saved, harsh events / 1000 km); corridor
-condition heatmap (lanes × chainage); Captain Score leaderboard; value-stack table.
-States: `loading` · `loaded` · `empty` (no scans yet) · `stale` (freshness > 1 day → flagged).
+Two tabs over one tenancy.
+
+**Live operations** — the operations board a fleet owner opens in the morning. Vehicle list with
+status, speed, distance remaining and driver fatigue level; corridor map with every vehicle on
+the selected vehicle's corridor, heading and position; and a detail panel for the selected bus:
+the driver at the wheel with their Captain Score and duty hours, the latest driver-camera
+snapshot with its age, **cabin video on request**, live telemetry (position, speed, lane, ETA,
+rpm against the vehicle's efficiency band, fuel, coolant, harsh events, link quality) and the
+load it is carrying. Admin additionally gets **Open this driver's screen** — a read-only mirror
+of the exact Drive screen that cab is showing, seeded from its telemetry record; a P0 fatigue
+overlay is visible in the mirror but cannot be acknowledged from a desk (§9.3).
+
+Cabin video is *requested*, never streamed: the tablet uploads the last N seconds when it next
+has bandwidth, and every request records who asked, when, and why (§16.3).
+
+**Insights** — the slower questions: fleet RQI, advisory compliance %, fuel saved, harsh events /
+1000 km; corridor condition heatmap (lanes × chainage); Captain Score leaderboard; value-stack
+table; RideScore composition.
+
+States: `loading` · `loaded` · `empty` (no vehicle reporting) · `stale` (freshness > 1 day →
+flagged) · `camera-offline` (DMS degraded to context-only, shown as a condition, not an error).
 
 ### 13.5 Government dashboard — web
 

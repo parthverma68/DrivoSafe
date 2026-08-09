@@ -3,9 +3,10 @@
  */
 import React from 'react';
 import { View, Text, TouchableOpacity, ScrollView } from 'react-native';
-import { C, S, MONO, BADGE_COLOR } from '../theme.js';
+import { MONO, BADGE_COLOR, useTheme } from '../theme.js';
 
 export function Chip({ children, tone, style }) {
+  const { C, S } = useTheme();
   const col =
     tone === 'ok' ? C.ok : tone === 'warn' ? C.warn :
     tone === 'danger' ? C.danger : tone === 'critical' ? '#fff' : C.fg2;
@@ -27,6 +28,7 @@ export function Chip({ children, tone, style }) {
 }
 
 export function Btn({ children, onPress, kind, disabled, style }) {
+  const { C, S } = useTheme();
   return (
     <TouchableOpacity
       onPress={onPress}
@@ -48,6 +50,7 @@ export function Btn({ children, onPress, kind, disabled, style }) {
 }
 
 export function Kpi({ k, v, d, tone }) {
+  const { C, S } = useTheme();
   return (
     <View style={S.kpi}>
       <Text style={S.kpiK}>{k}</Text>
@@ -60,6 +63,7 @@ export function Kpi({ k, v, d, tone }) {
 }
 
 export function Panel({ title, hint, children, style }) {
+  const { C, S } = useTheme();
   return (
     <View style={[S.panel, style]}>
       {title ? <Text style={S.h3}>{title}</Text> : null}
@@ -70,6 +74,7 @@ export function Panel({ title, hint, children, style }) {
 }
 
 export function StatLine({ k, v, tone }) {
+  const { C, S } = useTheme();
   return (
     <View style={S.statLine}>
       <Text style={S.statK} numberOfLines={1}>{k}</Text>
@@ -79,6 +84,7 @@ export function StatLine({ k, v, tone }) {
 }
 
 export function Bar({ pct, color }) {
+  const { C, S } = useTheme();
   return (
     <View style={S.bar}>
       <View style={{ width: Math.max(0, Math.min(100, pct)) + '%', height: '100%', backgroundColor: color || C.ok }} />
@@ -87,12 +93,14 @@ export function Bar({ pct, color }) {
 }
 
 export function Badge({ children, kind }) {
+  const { C, S } = useTheme();
   const c = BADGE_COLOR[kind];
   return <Text style={[S.badge, c]}>{children}</Text>;
 }
 
 /* A minimal table. RN has no <table>, so columns are flex weights. */
 export function Table({ cols, rows, keyExtractor, maxHeight }) {
+  const { C, S } = useTheme();
   const body = (
     <>
       <View style={[{ flexDirection: 'row', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: C.line2 }]}>
@@ -130,6 +138,7 @@ export function Table({ cols, rows, keyExtractor, maxHeight }) {
 /* RN has no <input type=range>; this is a touch-draggable equivalent sized for
  * a tablet rather than a mouse. */
 export function Slider({ value, min, max, step, onChange, width }) {
+  const { C, S } = useTheme();
   const w = width || 120;
   const pct = (value - min) / (max - min || 1);
   const set = (x) => {
@@ -162,6 +171,7 @@ export function Slider({ value, min, max, step, onChange, width }) {
 /* A cycling selector — a dropdown is a poor control on a moving vehicle, so
  * options advance on tap instead. */
 export function Cycler({ options, value, onChange, label, width }) {
+  const { C, S } = useTheme();
   const i = options.findIndex((o) => (o.value !== undefined ? o.value : o) === value);
   const cur = options[i] || options[0];
   return (

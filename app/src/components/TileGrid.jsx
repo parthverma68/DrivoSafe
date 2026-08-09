@@ -6,21 +6,30 @@
  * file is only the interaction.
  */
 import React, { useState } from 'react';
-import { GRID, ANCHOR, TILE_TYPES, freeSlots, trayTypes, swapTiles, moveTile, addTile, removeTile } from '@drivosafe/shared';
+import {
+  PROFILES, TILE_TYPES, freeSlots, trayTypes, swapTiles, moveTile, addTile, removeTile,
+} from '@drivosafe/shared';
 import { TILE_COMPONENTS } from './tiles/index.jsx';
 
-export default function TileGrid({ layout, setLayout, editing, state, route, onBreak, hud }) {
+/* `profile` is the grid this dashboard is being drawn on — the 5x3 tablet grid
+ * or the 4x3 phone grid, both from @drivosafe/shared. Every layout mutation is
+ * re-validated against it, so a tile can never be placed where that grid has no
+ * slot. A profile that is not editable never reaches the drag paths at all,
+ * because the parent will not turn `editing` on. */
+export default function TileGrid({
+  layout, setLayout, editing, state, route, onBreak, hud, profile = PROFILES.full,
+}) {
   const [dragId, setDragId] = useState(null);
   const [overKey, setOverKey] = useState(null);
 
   const occupied = new Set(layout.tiles.map((t) => t.x + ',' + t.y));
-  const empties = freeSlots(layout.anchor).filter((s) => !occupied.has(s.x + ',' + s.y));
+  const empties = freeSlots(layout.anchor, profile).filter((s) => !occupied.has(s.x + ',' + s.y));
   const tray = trayTypes(layout);
 
   const drop = (target) => {
     if (!dragId) return;
-    if (typeof target === 'string') setLayout(swapTiles(layout, dragId, target));
-    else setLayout(moveTile(layout, dragId, target.x, target.y));
+    if (typeof target === 'string') setLayout(swapTiles(layout, dragId, target, profile));
+    else setLayout(moveTile(layout, dragId, target.x, target.y, profile));
     setDragId(null);
     setOverKey(null);
   };
@@ -30,16 +39,16 @@ export default function TileGrid({ layout, setLayout, editing, state, route, onB
       <div
         className={'tile-grid' + (editing ? ' editing' : '')}
         style={{
-          gridTemplateColumns: `repeat(${GRID.cols}, 1fr)`,
-          gridTemplateRows: `repeat(${GRID.rows}, 1fr)`,
+          gridTemplateColumns: `repeat(${profile.cols}, 1fr)`,
+          gridTemplateRows: `repeat(${profile.rows}, 1fr)`,
         }}
       >
         {/* anchor — always largest, never draggable, never removable */}
         <div
           className="tile anchor"
           style={{
-            gridColumn: `${layout.anchor.x + 1} / span ${ANCHOR.w}`,
-            gridRow: `${layout.anchor.y + 1} / span ${ANCHOR.h}`,
+            gridColumn: `${layout.anchor.x + 1} / span ${profile.anchorW}`,
+            gridRow: `${layout.anchor.y + 1} / span ${profile.anchorH}`,
           }}
         >
           {hud}
@@ -69,7 +78,7 @@ export default function TileGrid({ layout, setLayout, editing, state, route, onB
                 <button
                   className="tile-remove"
                   title="Remove tile"
-                  onClick={() => setLayout(removeTile(layout, t.id))}
+                  onClick={() => setLayout(removeTile(layout, t.id, profile))}
                 >
                   ×
                 </button>
@@ -111,7 +120,7 @@ export default function TileGrid({ layout, setLayout, editing, state, route, onB
                 key={type}
                 className="tray-item"
                 title={TILE_TYPES[type].desc}
-                onClick={() => setLayout(addTile(layout, type))}
+                onClick={() => setLayout(addTile(layout, type, profile))}
                 disabled={empties.length === 0}
               >
                 + {TILE_TYPES[type].name}

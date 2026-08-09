@@ -57,7 +57,7 @@ is consumed byte-identically by both. The only forked layer is `src/platform/`.
 ```bash
 npm install          # workspace root: installs shared + app + native
 
-npm test             # 54 domain tests, plain Node, neither host installed
+npm test             # 60 domain tests, plain Node, neither host installed
 npm run web          # http://localhost:5173
 npm run web:build
 ```
@@ -131,6 +131,23 @@ Tick *sensor sim · alcohol present* on the breath step to walk the lockout path
 On a real bus the app launches straight into the check-in gate and then **Drive** under Android
 kiosk mode with no navigation at all (`KIOSK = true` in `native/src/App.jsx`).
 
+### On a phone
+
+Both builds are usable on a handset, and the drive screen is the part that needed real thought
+rather than a media query.
+
+- **Consoles re-stack rather than shrink.** The three-column operations board becomes one
+  scrolling column, the icon rail moves to the bottom within thumb reach, and wide data — the
+  corridor heatmap, the event tables — scrolls inside its own card instead of stretching the page.
+- **The drive screen gets a different grid** (§11.2 profiles), not a scaled-down one: the HUD plus
+  the three tiles a driver acts on — **speed & gear, next hazard, trip score**. Everything else is
+  gone, because nine tiles on a 6-inch screen is nine things nobody can read at 80 km/h. It is
+  fixed, so a phone never overwrites the dashboard the driver arranged on their tablet.
+- **Landscape is requested at the tap that starts the shift** — fullscreen, then an orientation
+  lock. Both are best-effort (iOS has no lock at all), so if the phone stays portrait the screen
+  says so, and the portrait profile still renders a usable dashboard: HUD across the top, the
+  three tiles in a row beneath it.
+
 ### Day and night
 
 Both builds carry two full palettes as tokens — night for the cab and the ops floor, day for a
@@ -162,7 +179,8 @@ bus. On real hardware it is absent and the identical state arrives from `src/pla
 shared/src/
 ├── drowsiness.js    DMS fusion engine + deterministic driver simulator
 ├── alerts.js        priority arbiter, dedupe, silence budget
-├── layout.js        tile algebra: anchor invariants, swap, reflow, validate
+├── layout.js        tile algebra: anchor invariants, swap, reflow, validate,
+│                   and the tablet / phone grid profiles
 ├── telemetry.js     gear advisory + vehicle/OBD/IMU simulator
 ├── corridors.js     corridor catalogue → library Route model
 ├── fleet.js         operators, buses, drivers, partners, assignments, shifts
@@ -170,7 +188,7 @@ shared/src/
 ├── checkin.js       the pre-drive gate: breath-test machine + face matcher
 ├── liveFleet.js     the live telemetry feed the consoles watch
 ├── useDriveLoop.js  the 10 Hz drive loop — platform injected, not imported
-└── *.test.js        54 behavioural tests
+└── *.test.js        60 behavioural tests
 
 app/src/  ·  native/src/
 ├── platform/        the seam — the only forked layer

@@ -15,7 +15,7 @@
  * receives what it needs as props. Nothing reads identity out of a global.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ROLE_BY_ID, publicAccount, ACCOUNTS, deviceBySerial, byId, BUSES } from '@drivosafe/shared';
+import { ROLE_BY_ID, publicAccount, ACCOUNTS, deviceBySerial, byId, BUSES, profileFor, isCompact } from '@drivosafe/shared';
 import { storage } from './platform/index.js';
 
 const K_SESSION = 'session';
@@ -42,6 +42,49 @@ export function useTheme() {
 
   const toggle = useCallback(() => setTheme((t) => (t === 'day' ? 'night' : 'day')), []);
   return { theme, setTheme, toggle, isDay: theme === 'day' };
+}
+
+/* ------------------------------------------------------------ viewport --- */
+/**
+ * Live viewport size and the layout profile it implies.
+ *
+ * `visualViewport` is preferred where it exists: on a phone the browser chrome
+ * and the on-screen keyboard change the usable height without firing a resize
+ * that `innerHeight` reflects usefully, and the drive screen has to know its
+ * real height to decide between the tablet grid and the phone grid.
+ */
+export function useViewport() {
+  const read = () => {
+    if (typeof window === 'undefined') return { width: 1280, height: 800 };
+    const vv = window.visualViewport;
+    return {
+      width: Math.round(vv ? vv.width : window.innerWidth),
+      height: Math.round(vv ? vv.height : window.innerHeight),
+    };
+  };
+
+  const [size, setSize] = useState(read);
+
+  useEffect(() => {
+    const onChange = () => setSize(read());
+    window.addEventListener('resize', onChange);
+    window.addEventListener('orientationchange', onChange);
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', onChange);
+    return () => {
+      window.removeEventListener('resize', onChange);
+      window.removeEventListener('orientationchange', onChange);
+      if (window.visualViewport) window.visualViewport.removeEventListener('resize', onChange);
+    };
+  }, []);
+
+  const profile = profileFor(size.width, size.height);
+  return {
+    ...size,
+    profile,
+    compact: isCompact(profile),
+    portrait: size.height > size.width,
+    phone: size.width < 700,
+  };
 }
 
 /* ----------------------------------------------------------- session ----- */

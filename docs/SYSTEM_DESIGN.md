@@ -735,6 +735,38 @@ completely independent of layout.
 Layout persists per driver and syncs to the cloud, so it follows them across buses. Adding a new
 tile type is one new consumer of the existing payload — no new data plumbing.
 
+
+**Grid profiles.** A phone is not a small tablet. Nine info tiles on a 6-inch screen is nine
+things nobody can read at 80 km/h, so a handset gets a *different* grid rather than the same one
+scaled down:
+
+| Profile | Grid | Anchor | Tiles | Editable |
+|---|---|---|---|---|
+| `full` — mounted tablet | 5 × 3 | 3 × 2 | driver's choice, up to 9 | yes, stationary only |
+| `compact` — phone, landscape | 4 × 3 | 3 × 3 | speed & gear · next hazard · trip score | **no** |
+| `compact-portrait` — phone, portrait | 3 × 3 | 3 × 2 | the same three, in a row under the HUD | **no** |
+
+The reduced set is the three things a driver acts on: what the bus is doing, what is coming, and
+how they are scoring against it. Both phone profiles keep the HUD on the screen's widest edge —
+three of four columns in landscape, the full width in portrait.
+
+The compact layouts are deliberately **not** editable, and are neither loaded from nor written to
+the driver's saved dashboard. On the tablet a driver arranges their own screen because there is
+room to; on a phone the reduced set *is* the design, and dragging the HUD into a corner of a
+screen that size would defeat the anchor rule rather than express it.
+
+The profile is chosen from the live viewport (`profileFor(width, height)`), so a rotation or a
+window resize re-lays the grid without a reload. The anchor invariants above hold in every
+profile — the same `validate()` runs, against that profile's dimensions.
+
+**Orientation.** The drive surface is landscape. The tablet pins it at the OS level
+(`android:screenOrientation="sensorLandscape"`), which is stronger than anything JS can do. A
+phone browser has to ask, and the request must come from inside a user gesture, so it hangs off
+the tap that starts the shift — fullscreen, then `screen.orientation.lock('landscape')`. Both are
+best-effort: iOS Safari has no orientation lock at all, and a rotation-locked device refuses it
+everywhere. Failure is not an error state — the screen asks the driver to rotate, the prompt is
+dismissible, and the portrait profile renders a usable dashboard for someone who cannot.
+
 ### 11.3 Route-event mapping pipeline
 
 Turns raw scans into corridor events. One call: `buildRouteEvents(routeGeoJSON, detectionsGeoJSON, opts)`.

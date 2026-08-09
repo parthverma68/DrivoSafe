@@ -9,11 +9,11 @@
  * On a real unit it is absent and the same state arrives from src/platform.
  */
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, ScrollView } from 'react-native';
+import { View, Text, ScrollView, useWindowDimensions } from 'react-native';
 import { RoadHazardView, HIGH_QUALITY, ULTRA_QUALITY, EXTREME_QUALITY } from 'react-road-hazards';
 import {
   CORRIDOR_DEFS, getRoute, ACTIVE_SHIFT, BUSES, DRIVERS, byId,
-  DEFAULT_LAYOUT, validate, LEVEL_META, useDriveLoop,
+  DEFAULT_LAYOUT, profileFor, layoutForProfile, isCompact, validate, LEVEL_META, useDriveLoop,
 } from '@drivosafe/shared';
 import { storage, driveIO } from '../platform/index.js';
 import { C, S, MONO, TONE_COLOR, alertStyle } from '../theme.js';
@@ -56,11 +56,22 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
   const bus = byId(BUSES, shift.busId);
   const driver = byId(DRIVERS, shift.driverId);
 
-  const [layout, setLayoutState] = useState(() =>
+  /* The tablet is a landscape appliance, but the same binary runs on a phone —
+   * a supervisor's handset, or a small in-cab unit. A phone gets the reduced
+   * grid from §11.2 profiles (HUD + speed & gear, next hazard, trip score)
+   * rather than nine unreadable tiles, and that grid is fixed, so a saved
+   * tablet dashboard is neither loaded nor overwritten. */
+  const { width, height } = useWindowDimensions();
+  const profile = profileFor(width, height);
+  const compact = isCompact(profile);
+
+  const [savedLayout, setSavedLayout] = useState(() =>
     validate(storage.get('layout:' + shift.driverId, DEFAULT_LAYOUT))
   );
+  const layout = compact ? layoutForProfile(profile) : savedLayout;
   const setLayout = (l) => {
-    setLayoutState(l);
+    if (compact) return;
+    setSavedLayout(l);
     storage.set('layout:' + shift.driverId, l);
   };
 
@@ -74,8 +85,8 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
    * force-committed the moment the bus rolls. */
   const stationary = state.speed < 1;
   useEffect(() => {
-    if (!stationary && editing) setEditing(false);
-  }, [stationary, editing]);
+    if ((!stationary || compact) && editing) setEditing(false);
+  }, [stationary, editing, compact]);
 
   const dms = state.drowsiness;
   const critical = dms.level === 'D4';
@@ -123,6 +134,7 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
       <TileGrid
         layout={layout}
         setLayout={setLayout}
+        profile={profile}
         editing={editing}
         state={state}
         route={route}
@@ -135,7 +147,7 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
           {...{
             routeId, setRouteId, running, setRunning, timeScale, setTimeScale,
             fatigueDial, setFatigueDial, compliant, setCompliant, quality, setQuality,
-            localHour, setLocalHour, editing, setEditing, stationary, state,
+            localHour, setLocalHour, editing, setEditing, stationary, state, compact,
           }}
         />
       )}
@@ -281,9 +293,12 @@ function SimStrip(p) {
 
           <Cycler options={Object.keys(QUALITY)} value={p.quality} onChange={p.setQuality} />
 
-          <Btn onPress={() => p.setEditing(!p.editing)} disabled={!p.stationary}>
-            {p.editing ? 'DONE' : 'EDIT LAYOUT'}
-          </Btn>
+          {/* the compact grid is fixed, so there is nothing to edit */}
+          {p.compact ? null : (
+            <Btn onPress={() => p.setEditing(!p.editing)} disabled={!p.stationary}>
+              {p.editing ? 'DONE' : 'EDIT LAYOUT'}
+            </Btn>
+          )}
 
           <Text style={{ fontFamily: MONO, fontSize: 9, color: C.fg3 }}>
             alerts 5min {p.state.alertStats.spokenLast5min}/30 · dropped {p.state.alertStats.dropped}

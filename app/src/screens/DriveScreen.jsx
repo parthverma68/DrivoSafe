@@ -7,8 +7,12 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { RoadHazardView, ULTRA_QUALITY, HIGH_QUALITY, EXTREME_QUALITY } from 'react-road-hazards';
-import { CORRIDOR_DEFS, getRoute, ACTIVE_SHIFT, BUSES, DRIVERS, byId, DEFAULT_LAYOUT, validate, LEVEL_META, useDriveLoop } from '@drivosafe/shared';
-import { storage, driveIO } from '../platform/index.js';
+import {
+  CORRIDOR_DEFS, getRoute, ACTIVE_SHIFT, BUSES, DRIVERS, byId,
+  DEFAULT_LAYOUT, layoutForProfile, validate, LEVEL_META, useDriveLoop,
+} from '@drivosafe/shared';
+import { storage, driveIO, presentation } from '../platform/index.js';
+import { useViewport } from '../session.js';
 import TileGrid from '../components/TileGrid.jsx';
 
 const QUALITY = { HIGH: HIGH_QUALITY, ULTRA: ULTRA_QUALITY, EXTREME: EXTREME_QUALITY };
@@ -47,11 +51,19 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
   const bus = byId(BUSES, shift.busId);
   const driver = byId(DRIVERS, shift.driverId);
 
-  const [layout, setLayoutState] = useState(() =>
+  /* On a phone the grid is a different grid, not a smaller one (§11.2
+   * profiles): the HUD plus speed & gear, next hazard and trip score. It is
+   * fixed, so the driver's saved tablet dashboard is neither loaded nor
+   * overwritten while they are on a handset. */
+  const { profile, compact, portrait } = useViewport();
+
+  const [savedLayout, setSavedLayout] = useState(() =>
     validate(storage.get('layout:' + shift.driverId, DEFAULT_LAYOUT))
   );
+  const layout = compact ? layoutForProfile(profile) : savedLayout;
   const setLayout = (l) => {
-    setLayoutState(l);
+    if (compact) return;
+    setSavedLayout(l);
     storage.set('layout:' + shift.driverId, l);
   };
 
@@ -65,8 +77,8 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
    * force-committed the moment the bus rolls. */
   const stationary = state.speed < 1;
   useEffect(() => {
-    if (!stationary && editing) setEditing(false);
-  }, [stationary, editing]);
+    if ((!stationary || compact) && editing) setEditing(false);
+  }, [stationary, editing, compact]);
 
   const hudRef = useRef(null);
   const [hudSize, setHudSize] = useState({ w: 640, h: 400 });
@@ -112,7 +124,7 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
   );
 
   return (
-    <div className="drive">
+    <div className={'drive' + (compact ? ' compact' : '')}>
       <StatusBar
         corridor={corridor}
         route={route}
@@ -120,6 +132,7 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
         bus={bus}
         driver={driver}
         stationary={stationary}
+        compact={compact}
       />
 
       <AlertBar alert={state.alert} />
@@ -127,6 +140,7 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
       <TileGrid
         layout={layout}
         setLayout={setLayout}
+        profile={profile}
         editing={editing}
         state={state}
         route={route}
@@ -135,6 +149,7 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
       />
 
       {mirror ? null : <SimStrip
+        compact={compact}
         corridorId={routeId}
         setCorridorId={setRouteId}
         running={running}
@@ -154,6 +169,13 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
         stationary={stationary}
         state={state}
       />}
+
+      {/* Orientation is requested at the tap that starts the shift, but no
+          browser guarantees it — iOS has no lock at all. When the phone stays
+          portrait the screen says so rather than rendering a 4x3 grid into a
+          column, and stays dismissible because a driver who cannot rotate
+          still needs the advisory. */}
+      {compact && portrait ? <RotatePrompt /> : null}
 
       {critical ? (
         <div className="p0-overlay">
@@ -190,10 +212,36 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
 }
 
 /* ---------- status bar ---------- */
-function StatusBar({ corridor, route, state, bus, driver, stationary }) {
+function StatusBar({ corridor, route, state, bus, driver, stationary, compact }) {
   const dms = state.drowsiness;
   const meta = LEVEL_META[dms.level] || LEVEL_META.D0;
   const stale = corridor && !/today/.test(corridor.freshness || '');
+
+  const level = (
+    <span
+      className={
+        'chip ' +
+        (meta.tone === 'critical' ? 'critical' : meta.tone === 'danger' ? 'danger' : meta.tone === 'warn' ? 'warn' : 'ok')
+      }
+    >
+      {dms.level} {meta.label}
+    </span>
+  );
+
+  /* A phone status bar carries only what changes a decision: which road, who is
+   * driving, and the driver's state. The rest is diagnostics for a mounted
+   * tablet with room for them. */
+  if (compact) {
+    return (
+      <div className="statusbar">
+        <span className="chip ok">{route.name}</span>
+        <span className="chip">{bus ? bus.reg : 'no bus'}</span>
+        <span className="spacer" />
+        {level}
+      </div>
+    );
+  }
+
   return (
     <div className="statusbar">
       <span className="chip ok">{route.name}</span>
@@ -211,14 +259,7 @@ function StatusBar({ corridor, route, state, bus, driver, stationary }) {
       <span className={'chip ' + (dms.mode === 'full' ? 'ok' : 'warn')}>
         DMS {dms.mode === 'full' ? 'CAM' : 'CTX'}
       </span>
-      <span
-        className={
-          'chip ' +
-          (meta.tone === 'critical' ? 'critical' : meta.tone === 'danger' ? 'danger' : meta.tone === 'warn' ? 'warn' : 'ok')
-        }
-      >
-        {dms.level} {meta.label}
-      </span>
+      {level}
       <span className="chip">{stationary ? 'STATIONARY' : 'IN MOTION'}</span>
       <span className="chip">SYNC QUEUED</span>
     </div>
@@ -245,16 +286,47 @@ function AlertBar({ alert }) {
   );
 }
 
+/* ---------- rotate prompt (phones only) ---------- */
+function RotatePrompt() {
+  const [dismissed, setDismissed] = useState(false);
+  if (dismissed) return null;
+  return (
+    <div className="rotate-prompt">
+      <div className="phone-glyph" aria-hidden="true"><i /></div>
+      <h2>Turn your phone sideways</h2>
+      <p>
+        The drive screen is a landscape surface — the road ahead needs the width.
+        If your rotation lock is on, switch it off.
+      </p>
+      <button className="primary lg" onClick={() => setDismissed(true)}>Continue anyway</button>
+    </div>
+  );
+}
+
 /* ---------- simulator strip (not shipped to the cab) ---------- */
 function SimStrip(props) {
   const {
     corridorId, setCorridorId, running, setRunning, timeScale, setTimeScale,
     fatigueDial, setFatigueDial, compliant, setCompliant, quality, setQuality,
-    localHour, setLocalHour, editing, setEditing, stationary, state,
+    localHour, setLocalHour, editing, setEditing, stationary, state, compact,
   } = props;
 
+  /* On a phone the sim controls are a sheet rather than a strip: they are a
+   * demo affordance, and they must not cost the HUD a third of the screen. */
+  const [open, setOpen] = useState(false);
+  if (compact && !open) {
+    return (
+      <button className="sim-fab" onClick={() => setOpen(true)} title="Sensor simulator">
+        SIM
+      </button>
+    );
+  }
+
   return (
-    <div className="tray" style={{ borderStyle: 'dashed' }}>
+    <div className={'tray' + (compact ? ' sheet' : '')} style={{ borderStyle: 'dashed' }}>
+      {compact ? (
+        <button className="quiet" onClick={() => setOpen(false)} style={{ order: 99 }}>CLOSE</button>
+      ) : null}
       <span className="mono dim" style={{ fontSize: 9, letterSpacing: '0.11em' }}>
         SENSOR SIM
       </span>
@@ -306,13 +378,15 @@ function SimStrip(props) {
         {Object.keys(QUALITY).map((q) => <option key={q}>{q}</option>)}
       </select>
 
-      <button
-        onClick={() => setEditing(!editing)}
-        disabled={!stationary}
-        title={stationary ? 'Rearrange tiles' : 'Layout editing is disabled in motion (§11.2)'}
-      >
-        {editing ? 'DONE' : 'EDIT LAYOUT'}
-      </button>
+      {compact ? null : (
+        <button
+          onClick={() => setEditing(!editing)}
+          disabled={!stationary}
+          title={stationary ? 'Rearrange tiles' : 'Layout editing is disabled in motion (§11.2)'}
+        >
+          {editing ? 'DONE' : 'EDIT LAYOUT'}
+        </button>
+      )}
 
       <span className="spacer" />
       <span className="mono dim" style={{ fontSize: 9 }}>

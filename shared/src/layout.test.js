@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   DEFAULT_LAYOUT, GRID, ANCHOR, freeSlots, trayTypes,
   swapTiles, moveTile, addTile, removeTile, validate, reflow,
+  PROFILES, COMPACT_LAYOUT, COMPACT_PORTRAIT_LAYOUT, profileFor, layoutForProfile, isCompact,
 } from './layout.js';
 import { createAlertArbiter, P } from './alerts.js';
 
@@ -124,4 +125,65 @@ test('the arbiter honours the minimum inter-utterance gap', () => {
   arb.post({ priority: P.HAZARD, text: 'rough road in 500 metres', postedAt: t0 + 800 });
   arb.tick(t0 + 800);
   assert.equal(spoken.length, 1, 'continuous speech is not information');
+});
+
+
+/* ---------------------------------------------------------------- profiles --
+ * The phone profile is a different grid, not a scaled-down one. What must hold
+ * is that it is still a legal layout under its own rules, and that it carries
+ * exactly the three tiles a driver acts on.
+ */
+
+test('a phone-sized viewport selects a compact profile, a tablet does not', () => {
+  assert.equal(profileFor(1280, 800).id, 'full', 'landscape tablet');
+  assert.equal(profileFor(844, 390).id, 'compact', 'phone held landscape — too short');
+  assert.equal(profileFor(390, 844).id, 'compact-portrait', 'phone held portrait — too narrow');
+  assert.equal(profileFor(0, 0).id, 'full', 'an unknown viewport must not degrade the tablet');
+  assert.ok(isCompact(profileFor(844, 390)) && isCompact(profileFor(390, 844)));
+  assert.ok(!isCompact(profileFor(1280, 800)));
+});
+
+test('both phone profiles put the HUD on the screen\'s widest edge', () => {
+  /* Landscape gives the road the width by taking three of four columns;
+   * portrait cannot, so it takes the full width and two of three rows. */
+  assert.equal(PROFILES.compact.anchorW / PROFILES.compact.cols, 0.75);
+  assert.equal(PROFILES.compactPortrait.anchorW, PROFILES.compactPortrait.cols);
+
+  const p = validate(COMPACT_PORTRAIT_LAYOUT, PROFILES.compactPortrait);
+  assert.equal(p.tiles.length, 3, 'the same three tiles survive in portrait');
+  assert.ok(p.tiles.every((t) => t.y === 2), 'in a row under the HUD');
+  assert.equal(layoutForProfile(PROFILES.compactPortrait), COMPACT_PORTRAIT_LAYOUT);
+});
+
+test('the compact layout is legal under the compact grid and unchanged by validation', () => {
+  const validated = validate(COMPACT_LAYOUT, PROFILES.compact);
+  assert.equal(validated.tiles.length, COMPACT_LAYOUT.tiles.length,
+    'no compact tile may be dropped as off-grid or under the anchor');
+  assert.deepEqual(
+    validated.tiles.map((t) => t.type),
+    ['speed-gear', 'next-hazard', 'trip-score']
+  );
+});
+
+test('the compact grid leaves exactly three slots beside the HUD', () => {
+  const slots = freeSlots(COMPACT_LAYOUT.anchor, PROFILES.compact);
+  assert.equal(slots.length, 3);
+  assert.ok(slots.every((s) => s.x === 3), 'all three sit in the column beside the anchor');
+});
+
+test('the compact anchor still covers more of its grid than every tile combined', () => {
+  const p = PROFILES.compact;
+  const anchorCells = p.anchorW * p.anchorH;
+  assert.ok(anchorCells > COMPACT_LAYOUT.tiles.length,
+    'the HUD stays the largest thing on the screen at any size');
+});
+
+test('the tablet layout does not survive validation against the compact grid', () => {
+  /* A saved 5x3 dashboard cannot simply be reused on a phone: its right-hand
+   * column is off-grid there. This is why the compact profile ships a fixed
+   * layout rather than reusing the driver's saved one. */
+  const carried = validate(DEFAULT_LAYOUT, PROFILES.compact);
+  assert.ok(carried.tiles.length < DEFAULT_LAYOUT.tiles.length);
+  assert.equal(layoutForProfile(PROFILES.compact), COMPACT_LAYOUT);
+  assert.equal(layoutForProfile(PROFILES.full), DEFAULT_LAYOUT);
 });

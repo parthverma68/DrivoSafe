@@ -611,6 +611,9 @@ function AlcoholStep({ driver, bus, onResult, onCleared, onBack }) {
 }
 
 function BlowRing({ state, progress, seconds, result }) {
+  /* Drawn in a fixed 232-unit space and scaled by the viewBox, so the ring
+   * follows whatever size the stylesheet gives it — a phone shrinks it rather
+   * than having a fixed-size SVG spill out of its own container. */
   const size = 232;
   const r = 104;
   const c = 2 * Math.PI * r;
@@ -619,7 +622,7 @@ function BlowRing({ state, progress, seconds, result }) {
 
   return (
     <div className={'blow-ring' + (state === 'ready' ? ' armed' : '')}>
-      <svg width={size} height={size}>
+      <svg viewBox={`0 0 ${size} ${size}`} width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--surface-3)" strokeWidth="10" />
         <circle
           cx={size / 2} cy={size / 2} r={r} fill="none" stroke={tone} strokeWidth="10"

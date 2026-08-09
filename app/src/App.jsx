@@ -23,14 +23,15 @@ import GovernmentScreen from './screens/GovernmentScreen.jsx';
 import WelcomeScreen from './screens/WelcomeScreen.jsx';
 import LoginScreen from './screens/LoginScreen.jsx';
 import CheckinScreen from './screens/CheckinScreen.jsx';
-import { speech } from './platform/index.js';
-import { useSession, useTheme } from './session.js';
+import { speech, presentation } from './platform/index.js';
+import { useSession, useTheme, useViewport } from './session.js';
 import {
   Avatar, Chip, SURFACE_ICON, IconSun, IconMoon, IconSignOut, IconBack, IconPower,
 } from './components/ui.jsx';
 
 export default function App() {
   const { theme, toggle: toggleTheme } = useTheme();
+  const { compact } = useViewport();
   const session = useSession();
   const { account, role, pendingRole, setPendingRole, install, signIn, signOut, bindInstall, clearInstall } = session;
 
@@ -45,7 +46,15 @@ export default function App() {
     speech.setEnabled(next);
   };
 
+  /* The cab is a landscape surface. On a phone that has to be asked for, and
+   * only from inside a user gesture — which is why this hangs off the tap that
+   * starts the shift rather than off an effect. It is best-effort everywhere
+   * (iOS has no orientation lock at all); the drive screen prompts to rotate
+   * when the request does not take. */
+  const enterDrive = () => { if (compact) presentation.enterDriveMode(); };
+
   const leaveShift = () => {
+    presentation.exitDriveMode();
     setShift(null);
     setSurface(null);
   };
@@ -81,7 +90,7 @@ export default function App() {
         install={install}
         onBind={bindInstall}
         onRebind={clearInstall}
-        onCleared={({ shift: s }) => { setShift(s); setSurface('drive'); }}
+        onCleared={({ shift: s }) => { enterDrive(); setShift(s); setSurface('drive'); }}
         onSignOut={fullSignOut}
         theme={theme}
         onToggleTheme={toggleTheme}
@@ -96,7 +105,7 @@ export default function App() {
     return (
       <div className="app">
         <div className="main">
-          <header className="topbar">
+          <header className="topbar cab">
             <Avatar name={driver ? driver.name : account.name} hue={account.avatarHue} />
             <div className="title">
               {driver ? driver.name : account.name}
@@ -136,7 +145,12 @@ export default function App() {
       <div className="app">
         <div className="main">
           <header className="topbar">
-            <button className="ghost" onClick={() => setMirror(null)}><IconBack size={15} /> Back to fleet</button>
+            <button
+              className="ghost"
+              onClick={() => { presentation.exitDriveMode(); setMirror(null); }}
+            >
+              <IconBack size={15} /> Back to fleet
+            </button>
             <div className="title">
               {mirror.bus.reg}
               <small>{mirror.driver ? mirror.driver.name : 'unassigned'} · {mirror.corridorName}</small>
@@ -169,7 +183,11 @@ export default function App() {
               <button
                 key={s.id}
                 className={'rail-item' + (current === s.id ? ' on' : '')}
-                onClick={() => setSurface(s.id)}
+                onClick={() => {
+                  if (s.id === 'drive') enterDrive();
+                  else if (current === 'drive') presentation.exitDriveMode();
+                  setSurface(s.id);
+                }}
               >
                 <Icon size={20} />
                 <span className="tip">{s.label} · {s.sub}</span>
@@ -222,7 +240,12 @@ export default function App() {
         </header>
 
         <main className={'screen' + (current === 'drive' || current === 'fleet' ? ' nopad' : '')}>
-          {current === 'fleet' && <FleetScreen account={account} onMirror={setMirror} />}
+          {current === 'fleet' && (
+            <FleetScreen
+              account={account}
+              onMirror={(r) => { enterDrive(); setMirror(r); }}
+            />
+          )}
           {current === 'admin' && <AdminScreen />}
           {current === 'editor' && <RouteEditorScreen />}
           {current === 'gov' && <GovernmentScreen account={account} />}

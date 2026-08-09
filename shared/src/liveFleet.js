@@ -154,7 +154,10 @@ export function busTelemetry(busId, at = Date.now(), tempo = 30) {
     fuelPct: Math.round(clamp(92 - f * 34 + wave(busId + ':fuel', t, 3000) * 6, 8, 100)),
     coolantC: Math.round(74 + wave(busId + ':temp', t, 420) * 18),
     rpm: parked ? 0 : Math.round(900 + wave(busId + ':rpm', t, 40) * 1100),
-    odometerKm: 148000 + (hash(busId) % 90000) + Math.round(t / 40),
+    /* Lifetime distance: a stable per-vehicle base plus the distance covered
+     * on this corridor. Deriving it from the clock instead would make the
+     * reading climb into the billions within a session. */
+    odometerKm: 148000 + (hash(busId) % 90000) + Math.round(progressM / 1000),
 
     cabin: {
       cameraOnline,

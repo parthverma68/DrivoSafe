@@ -15,6 +15,7 @@ export { createAlertArbiter, modalityFor, P } from './alerts.js';
 
 export {
   GRID, ANCHOR, TILE_TYPES, DEFAULT_LAYOUT,
+  PROFILES, COMPACT_LAYOUT, COMPACT_PORTRAIT_LAYOUT, profileFor, layoutForProfile, isCompact,
   freeSlots, trayTypes, swapTiles, moveTile, addTile, removeTile, validate, reflow,
 } from './layout.js';
 

@@ -12,7 +12,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { View, Text, Animated, PanResponder, ScrollView, TouchableOpacity } from 'react-native';
 import {
-  GRID, ANCHOR, TILE_TYPES, freeSlots, trayTypes,
+  PROFILES, TILE_TYPES, freeSlots, trayTypes,
   swapTiles, moveTile, addTile, removeTile,
 } from '@drivosafe/shared';
 import { C, S } from '../theme.js';
@@ -20,20 +20,26 @@ import { TILE_COMPONENTS } from './tiles.jsx';
 
 const GAP = 8;
 
-export default function TileGrid({ layout, setLayout, editing, state, route, onBreak, hud }) {
+/* `profile` is the grid being drawn — the 5x3 tablet grid or one of the phone
+ * grids, both from @drivosafe/shared. Cell size, hit-testing and every layout
+ * mutation are derived from it, so a tile can never land where the current grid
+ * has no slot. */
+export default function TileGrid({
+  layout, setLayout, editing, state, route, onBreak, hud, profile = PROFILES.full,
+}) {
   const [box, setBox] = useState({ w: 0, h: 0 });
   const [dragId, setDragId] = useState(null);
   const [overSlot, setOverSlot] = useState(null);
 
-  const cellW = box.w ? (box.w - GAP * (GRID.cols - 1)) / GRID.cols : 0;
-  const cellH = box.h ? (box.h - GAP * (GRID.rows - 1)) / GRID.rows : 0;
+  const cellW = box.w ? (box.w - GAP * (profile.cols - 1)) / profile.cols : 0;
+  const cellH = box.h ? (box.h - GAP * (profile.rows - 1)) / profile.rows : 0;
   const at = (x, y) => ({ left: x * (cellW + GAP), top: y * (cellH + GAP) });
 
   const occupied = useMemo(
     () => new Set(layout.tiles.map((t) => t.x + ',' + t.y)),
     [layout]
   );
-  const empties = freeSlots(layout.anchor).filter((s) => !occupied.has(s.x + ',' + s.y));
+  const empties = freeSlots(layout.anchor, profile).filter((s) => !occupied.has(s.x + ',' + s.y));
   const tray = trayTypes(layout);
 
   /* Which grid cell does a point land in? Returns null for cells under the
@@ -41,9 +47,9 @@ export default function TileGrid({ layout, setLayout, editing, state, route, onB
   const cellAt = (px, py) => {
     const x = Math.floor(px / (cellW + GAP));
     const y = Math.floor(py / (cellH + GAP));
-    if (x < 0 || y < 0 || x >= GRID.cols || y >= GRID.rows) return null;
+    if (x < 0 || y < 0 || x >= profile.cols || y >= profile.rows) return null;
     const a = layout.anchor;
-    if (x >= a.x && x < a.x + ANCHOR.w && y >= a.y && y < a.y + ANCHOR.h) return null;
+    if (x >= a.x && x < a.x + profile.anchorW && y >= a.y && y < a.y + profile.anchorH) return null;
     return { x, y };
   };
 
@@ -86,14 +92,14 @@ export default function TileGrid({ layout, setLayout, editing, state, route, onB
                 {
                   position: 'absolute',
                   ...at(layout.anchor.x, layout.anchor.y),
-                  width: cellW * ANCHOR.w + GAP * (ANCHOR.w - 1),
-                  height: cellH * ANCHOR.h + GAP * (ANCHOR.h - 1),
+                  width: cellW * profile.anchorW + GAP * (profile.anchorW - 1),
+                  height: cellH * profile.anchorH + GAP * (profile.anchorH - 1),
                 },
               ]}
             >
               {hud(
-                Math.round(cellW * ANCHOR.w + GAP * (ANCHOR.w - 1)),
-                Math.round(cellH * ANCHOR.h + GAP * (ANCHOR.h - 1))
+                Math.round(cellW * profile.anchorW + GAP * (profile.anchorW - 1)),
+                Math.round(cellH * profile.anchorH + GAP * (profile.anchorH - 1))
               )}
             </View>
 
@@ -117,11 +123,11 @@ export default function TileGrid({ layout, setLayout, editing, state, route, onB
                   const other = layout.tiles.find((o) => o.x === cell.x && o.y === cell.y);
                   setLayout(
                     other && other.id !== t.id
-                      ? swapTiles(layout, t.id, other.id)
-                      : moveTile(layout, t.id, cell.x, cell.y)
+                      ? swapTiles(layout, t.id, other.id, profile)
+                      : moveTile(layout, t.id, cell.x, cell.y, profile)
                   );
                 }}
-                onRemove={() => setLayout(removeTile(layout, t.id))}
+                onRemove={() => setLayout(removeTile(layout, t.id, profile))}
                 state={state}
                 route={route}
                 onBreak={onBreak}
@@ -149,7 +155,7 @@ export default function TileGrid({ layout, setLayout, editing, state, route, onB
                     key={type}
                     activeOpacity={0.7}
                     disabled={empties.length === 0}
-                    onPress={() => setLayout(addTile(layout, type))}
+                    onPress={() => setLayout(addTile(layout, type, profile))}
                     style={[S.btn, empties.length === 0 && { opacity: 0.4 }]}
                   >
                     <Text style={S.btnTxt}>+ {TILE_TYPES[type].name}</Text>

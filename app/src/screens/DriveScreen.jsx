@@ -13,8 +13,17 @@ import TileGrid from '../components/TileGrid.jsx';
 
 const QUALITY = { HIGH: HIGH_QUALITY, ULTRA: ULTRA_QUALITY, EXTREME: EXTREME_QUALITY };
 
-export default function DriveScreen() {
-  const [routeId, setRouteId] = useState(ACTIVE_SHIFT.routeId);
+/**
+ * `shift` binds the screen to a driver, bus and corridor — normally the one the
+ * check-in gate just produced.
+ *
+ * `mirror` is an admin watching someone else's cab. The screen is identical
+ * because that is the entire point of a mirror: no sensor strip, no layout
+ * editing, and the drive state is seeded from that vehicle's live telemetry
+ * record rather than from local controls.
+ */
+export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, record = null }) {
+  const [routeId, setRouteId] = useState(shift.routeId);
   const [running, setRunning] = useState(true);
   const [timeScale, setTimeScale] = useState(6);
   const [fatigueDial, setFatigueDial] = useState(0.15);
@@ -23,17 +32,27 @@ export default function DriveScreen() {
   const [quality, setQuality] = useState('ULTRA');
   const [localHour, setLocalHour] = useState(new Date().getHours());
 
+  /* In mirror mode the local dials are not the driver's reality — the fleet
+   * record is. Feed it in and stop offering the controls. */
+  useEffect(() => {
+    if (!mirror || !record) return;
+    setRouteId(record.corridorId);
+    setFatigueDial(record.fatigue.score);
+    setCompliant(record.complianceScore >= 75);
+    setRunning(record.speedKph > 3);
+  }, [mirror, record]);
+
   const route = useMemo(() => getRoute(routeId), [routeId]);
   const corridor = CORRIDOR_DEFS.find((c) => c.id === routeId);
-  const bus = byId(BUSES, ACTIVE_SHIFT.busId);
-  const driver = byId(DRIVERS, ACTIVE_SHIFT.driverId);
+  const bus = byId(BUSES, shift.busId);
+  const driver = byId(DRIVERS, shift.driverId);
 
   const [layout, setLayoutState] = useState(() =>
-    validate(storage.get('layout:' + ACTIVE_SHIFT.driverId, DEFAULT_LAYOUT))
+    validate(storage.get('layout:' + shift.driverId, DEFAULT_LAYOUT))
   );
   const setLayout = (l) => {
     setLayoutState(l);
-    storage.set('layout:' + ACTIVE_SHIFT.driverId, l);
+    storage.set('layout:' + shift.driverId, l);
   };
 
   const { state, celebrate, onDriveInfo, actions } = useDriveLoop({
@@ -115,7 +134,7 @@ export default function DriveScreen() {
         hud={hud}
       />
 
-      <SimStrip
+      {mirror ? null : <SimStrip
         corridorId={routeId}
         setCorridorId={setRouteId}
         running={running}
@@ -134,7 +153,7 @@ export default function DriveScreen() {
         setEditing={setEditing}
         stationary={stationary}
         state={state}
-      />
+      />}
 
       {critical ? (
         <div className="p0-overlay">
@@ -148,15 +167,22 @@ export default function DriveScreen() {
             {dms.ocular ? (dms.ocular.perclos * 100).toFixed(0) + '%' : 'n/a'} · on task{' '}
             {Math.floor(dms.timeOnTaskMin)} min
           </div>
-          <div className="row" style={{ justifyContent: 'center' }}>
-            <button onClick={actions.acknowledgeFatigue}>ACKNOWLEDGE</button>
-            <button
-              onClick={() => { actions.acknowledgeFatigue(); actions.takeBreak(); }}
-              style={{ background: 'transparent', color: '#fff', borderColor: '#fff' }}
-            >
-              LOG BREAK NOW
-            </button>
-          </div>
+          {/* A P0 belongs to the driver. An admin watching a mirror can see it
+              fire but cannot dismiss it from a desk — only the person in the
+              seat can acknowledge (§9.3). */}
+          {mirror ? (
+            <div className="chip critical">READ-ONLY MIRROR · ONLY THE DRIVER CAN ACKNOWLEDGE</div>
+          ) : (
+            <div className="row" style={{ justifyContent: 'center' }}>
+              <button onClick={actions.acknowledgeFatigue}>ACKNOWLEDGE</button>
+              <button
+                onClick={() => { actions.acknowledgeFatigue(); actions.takeBreak(); }}
+                style={{ background: 'transparent', color: '#fff', borderColor: '#fff' }}
+              >
+                LOG BREAK NOW
+              </button>
+            </div>
+          )}
         </div>
       ) : null}
     </div>

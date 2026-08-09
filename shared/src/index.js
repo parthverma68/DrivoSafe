@@ -25,9 +25,26 @@ export {
 export { CORRIDOR_DEFS, getRoute, registerCorridor } from './corridors.js';
 
 export {
-  OPERATORS, BUSES, DRIVERS, PARTNERS, ACTIVE_SHIFT,
-  badgeFor, byId, forOperator,
+  OPERATORS, BUSES, DRIVERS, PARTNERS, ASSIGNMENTS, ACTIVE_SHIFT,
+  badgeFor, byId, forOperator, assignmentFor, busBySerial, makeShift,
 } from './fleet.js';
+
+export {
+  ROLES, ROLE_BY_ID, SURFACES, ACCOUNTS, DEVICES, ENROLMENTS,
+  authenticate, publicAccount, accountByUsername, accountsForRole,
+  deviceBySerial, deviceForBus, enrolmentFor, normaliseSerial,
+  surfacesFor, canAccess, scopeOf,
+} from './accounts.js';
+
+export {
+  ALCOHOL_POLICY, FACE_POLICY, CHECKIN_STEPS,
+  createBreathTest, createCheckinGate, verifyFace, makeCapture, failingCell,
+} from './checkin.js';
+
+export {
+  busTelemetry, fleetSnapshot, fleetSummary, pointAlong,
+  requestCabinClip, clipState, STATUS_META,
+} from './liveFleet.js';
 
 export { makeSampleScan } from './sampleScan.js';
 

@@ -23,7 +23,7 @@ hardware, edge and cloud architecture, all seven subsystems, the data model, eve
 the cloud API and sync protocol, non-functional requirements, security and privacy,
 deployment, observability, risks and build order.
 
-Three parts of it are new relative to the upstream RoadIntel specification and carry the
+Five parts of it are new relative to the upstream RoadIntel specification and carry the
 most design weight:
 
 - **§8 Driver Monitoring System** — camera-based drowsiness detection: PERCLOS, blink
@@ -34,6 +34,12 @@ most design weight:
   priority ladder P0–P6 with pre-emption, deduplication and an explicit silence budget.
 - **§11.2 Tile dashboard** — the anchor-tile algebra that makes the HUD structurally
   impossible to remove.
+- **§12.5 Identity, roles and device binding** — role as a *scope* rather than a job title,
+  `operatorId` tenancy applied where data is selected rather than where it is rendered, and the
+  one-time bolt-in that makes the vehicle known before anyone signs in.
+- **§13.0 The pre-drive gate** — vehicle → face → breath, and the three rules that decide whether
+  a safety device gets used or routed around: a short blow is not an attempt, an over-long one is
+  truncated not rejected, and three failures lock the vehicle in a way the driver cannot clear.
 
 ---
 
@@ -51,7 +57,7 @@ is consumed byte-identically by both. The only forked layer is `src/platform/`.
 ```bash
 npm install          # workspace root: installs shared + app + native
 
-npm test             # 22 domain tests, plain Node, neither host installed
+npm test             # 54 domain tests, plain Node, neither host installed
 npm run web          # http://localhost:5173
 npm run web:build
 ```
@@ -84,19 +90,54 @@ coming for the OBD-II dongle and the NIR camera pipeline.
 | Layout | CSS grid | measured cells + absolute positioning |
 | Drag & drop | HTML5 DnD | `PanResponder` + `Animated` |
 
-### Five surfaces, on both
+### One flow, four roles
+
+```
+welcome → sign in → [driver: check-in gate] → the surfaces that role owns
+```
+
+`role.surfaces` is the allow-list the shell iterates, so a surface outside a role's scope is
+never constructed — a driver's running app contains no fleet console at all, and a government
+official's contains no vehicle anywhere in it.
+
+| Role | Sees | Sign in as |
+|---|---|---|
+| **Driver** | Drive, after clearing the pre-drive gate | `ramesh` / `1234` |
+| **Fleet owner** | Fleet console — their own buses only | `sarthi` / `fleet` |
+| **Administrator** | Everything, and can mirror any cab's live drive screen | `admin` / `admin` |
+| **Government official** | Road Authority only — no operator, driver or vehicle identity | `rto` / `gov` |
+
+**The driver's pre-drive gate** is the part with teeth. The tablet is bound to one bus once, at
+fitment, so every shift after that the *vehicle* is already known and the driver only has to
+prove they are the driver:
+
+1. **Vehicle** — the bound serial resolves the bus; confirm, or rebind if the unit was moved.
+2. **Identity** — a front-camera burst matched against the faces enrolled for that bus's
+   operator. An unknown face opens **registration, not refusal**; a dark lens is a capture
+   verdict, not an identity one.
+3. **Breath** — a 5–8 s blow at 0.01 %BAC fleet policy. A short blow does not cost an attempt;
+   **three failures lock the vehicle** and only a supervisor override clears it.
+
+Tick *sensor sim · alcohol present* on the breath step to walk the lockout path.
 
 | Surface | What it is |
 |---|---|
 | **Drive** | The tablet product. Drag-and-drop tile grid with the HUD anchored, live advisory, compliance, drowsiness, alert arbitration. |
-| **Route Editor** | Corridor authoring: scan import, multi-pass fusion, editable events, live HUD verification, publish. |
+| **Fleet** | Live operations board — map, vehicle list, the driver at the wheel, cabin video on request, live telemetry — plus operator KPIs, corridor heatmap, Captain Score leaderboard, value stack, RideScore. |
 | **Admin** | Onboarding, fleet summaries, driver profiles, fatigue review. |
-| **Fleet** | Operator KPIs, corridor condition heatmap, Captain Score leaderboard, value stack, RideScore. |
-| **Government** | Surface score, maintenance priority P1–P3, deterioration trend, passive observables. |
+| **Corridors** | Corridor authoring: scan import, multi-pass fusion, editable events, live HUD verification, publish. |
+| **Road Authority** | Surface score, maintenance priority P1–P3, deterioration trend, passive observables. |
 
-On a real bus the app launches straight into **Drive** under Android kiosk mode with no
-navigation at all (`KIOSK = true` in `native/src/App.jsx`). The surface switcher exists so all
-five are reviewable from one build.
+On a real bus the app launches straight into the check-in gate and then **Drive** under Android
+kiosk mode with no navigation at all (`KIOSK = true` in `native/src/App.jsx`).
+
+### Day and night
+
+Both builds carry two full palettes as tokens — night for the cab and the ops floor, day for a
+depot office with a window behind the monitor. The web toggle is in the rail and follows the OS
+preference on first load. On the tablet the console surfaces honour the toggle and **the Drive
+surface does not**: it is wrapped in `<NightOnly>`, because a white screen on a windscreen mount
+at 03:00 is a glare hazard, not a preference.
 
 ---
 
@@ -124,12 +165,19 @@ shared/src/
 ├── layout.js        tile algebra: anchor invariants, swap, reflow, validate
 ├── telemetry.js     gear advisory + vehicle/OBD/IMU simulator
 ├── corridors.js     corridor catalogue → library Route model
-├── fleet.js         operators, buses, drivers, partners, shifts
+├── fleet.js         operators, buses, drivers, partners, assignments, shifts
+├── accounts.js      roles, accounts, device binding, face enrolments, tenancy
+├── checkin.js       the pre-drive gate: breath-test machine + face matcher
+├── liveFleet.js     the live telemetry feed the consoles watch
 ├── useDriveLoop.js  the 10 Hz drive loop — platform injected, not imported
-└── *.test.js        22 behavioural tests
+└── *.test.js        54 behavioural tests
 
 app/src/  ·  native/src/
 ├── platform/        the seam — the only forked layer
-├── components/      TileGrid + the ten info tiles
-└── screens/         the five surfaces
+├── session.js       role session + the one-time install record
+├── components/      TileGrid, the ten info tiles, the fleet map, camera views
+└── screens/         welcome · login · check-in · the five surfaces
 ```
+
+`accounts.js` is the frontend stand-in for the Identity Service and is deliberately shaped like
+what the server will return, so the backend can be built against it rather than around it.

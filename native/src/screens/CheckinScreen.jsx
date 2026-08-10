@@ -7,15 +7,17 @@
  * machine out of the view layer.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, ScrollView, TextInput, TouchableOpacity } from 'react-native';
+import { View, Text, ScrollView, TextInput, TouchableOpacity, Animated } from 'react-native';
 import Svg, { Circle, G } from 'react-native-svg';
 import {
-  BUSES, DRIVERS, OPERATORS, ENROLMENTS, DEVICES, byId, forOperator, deviceBySerial,
-  createBreathTest, createCheckinGate, verifyFace, makeCapture, enrolmentFor, makeShift,
+  BUSES, DRIVERS, OPERATORS, ENROLMENTS, DEVICES, CORRIDOR_DEFS, byId, forOperator,
+  deviceBySerial, createBreathTest, createSimulatedAnalyser, createCheckinGate, verifyFace,
+  makeCapture, enrolmentFor, makeShift, createLockout, lockedOutAttendance, openAttendance,
 } from '@drivosafe/shared';
 import { useTheme, MONO } from '../theme.js';
+import * as cam from '../platform/camera.js';
 import {
-  Wordmark, Btn, Chip, Avatar, Meter, Stepper, Viewport, SyntheticFeed,
+  Wordmark, Btn, Chip, Avatar, Meter, Stepper, Viewport, SyntheticFeed, usePulse,
   IconCheck, IconAlert, IconLock, IconFace, IconWind, IconChip, IconArrow, IconBack,
   IconRefresh, IconSignOut, IconSun, IconMoon,
 } from '../components/kit.jsx';
@@ -24,9 +26,12 @@ const STEPS = [
   { id: 'vehicle', label: 'Vehicle' },
   { id: 'identity', label: 'Identity' },
   { id: 'alcohol', label: 'Breath test' },
+  { id: 'assignment', label: 'Bus & route' },
 ];
 
-export default function CheckinScreen({ account, install, onBind, onRebind, onCleared, onSignOut }) {
+export default function CheckinScreen({
+  account, install, onBind, onRebind, onCleared, onSignOut, onLockout,
+}) {
   const { C, S, mode, toggle } = useTheme();
   const gateRef = useRef(null);
   if (!gateRef.current) gateRef.current = createCheckinGate();
@@ -73,19 +78,73 @@ export default function CheckinScreen({ account, install, onBind, onRebind, onCl
           />
         ) : null}
 
-        {gate.step === 'alcohol' || gate.step === 'cleared' ? (
+        {gate.step === 'alcohol' ? (
           <AlcoholStep
             driver={byId(DRIVERS, (gate.driver && gate.driver.driverId) || account.driverId) || { name: account.name }}
             bus={bus}
             onResult={(s) => push(gateRef.current.applyBreath(s))}
             onBack={() => push(gateRef.current.back())}
-            onCleared={() => onCleared({
-              shift: makeShift({
-                driverId: (gate.driver && gate.driver.driverId) || account.driverId,
-                busId: bus ? bus.id : 'bus-1',
-                routeId: bus ? bus.routeId : undefined,
-              }),
-            })}
+            onLocked={(breath) => {
+              /* The lock leaves the cab: only the operator or an administrator
+               * can clear it, so they are the ones told. The driver still gets
+               * an attendance row — being turned away is attendance data. */
+              const driverId = (gate.driver && gate.driver.driverId) || account.driverId;
+              const busId = bus ? bus.id : 'bus-1';
+              const operatorId = bus ? bus.operatorId : account.operatorId;
+              const lockout = createLockout({
+                busId,
+                operatorId,
+                driverId,
+                deviceSerial: install ? install.serial : null,
+                readings: breath.history.filter((h) => h.valid && !h.override),
+              });
+              if (onLockout) {
+                onLockout(lockout, lockedOutAttendance({
+                  driverId, busId, operatorId,
+                  deviceSerial: install ? install.serial : null,
+                  lockCode: lockout.code,
+                  breath: {
+                    bac: lockout.worstBac,
+                    attempts: breath.attempts,
+                    passed: false,
+                    deviceId: breath.device ? breath.device.id : null,
+                  },
+                }));
+              }
+            }}
+          />
+        ) : null}
+
+        {gate.step === 'assignment' || gate.step === 'cleared' ? (
+          <AssignmentStep
+            account={account}
+            bus={bus}
+            driver={byId(DRIVERS, (gate.driver && gate.driver.driverId) || account.driverId) || { name: account.name }}
+            onBack={() => push(gateRef.current.back())}
+            onConfirm={({ busId, routeId }) => {
+              push(gateRef.current.confirmAssignment({ busId, routeId }));
+              const driverId = (gate.driver && gate.driver.driverId) || account.driverId;
+              const chosen = byId(BUSES, busId);
+              onCleared({
+                shift: makeShift({ driverId, busId, routeId }),
+                attendance: openAttendance({
+                  driverId,
+                  busId,
+                  operatorId: chosen ? chosen.operatorId : account.operatorId,
+                  routeId,
+                  deviceSerial: install ? install.serial : null,
+                  identity: gate.driver,
+                  breath: gate.alcohol && gate.alcohol.result
+                    ? {
+                        bac: gate.alcohol.result.bac,
+                        attempts: gate.alcohol.attempts,
+                        passed: true,
+                        deviceId: gate.alcohol.result.deviceId,
+                      }
+                    : null,
+                }),
+              });
+            }}
           />
         ) : null}
       </ScrollView>
@@ -224,20 +283,53 @@ function IdentityStep({ account, bus, operator, onConfirm, onBack }) {
   const [result, setResult] = useState(null);
   const [simUnknown, setSimUnknown] = useState(false);
 
+  /* The real front camera when VisionCamera is present and permitted; the
+   * synthetic feed otherwise. A missing camera is a reported condition, not a
+   * broken screen — the layout is identical either way. */
+  const cameraRef = useRef(null);
+  const device = cam.useCameraDevice('front');
+  const [permission, setPermission] = useState('unavailable');
+  useEffect(() => {
+    let alive = true;
+    if (!cam.available()) return undefined;
+    cam.requestPermission().then((p) => { if (alive) setPermission(p); });
+    return () => { alive = false; };
+  }, []);
+  const status = cam.cameraStatus(device, permission);
+
   const candidates = useMemo(() => {
     const ids = new Set(forOperator(DRIVERS, bus ? bus.operatorId : null).map((d) => d.id));
     return ENROLMENTS.filter((e) => ids.has(e.driverId));
   }, [bus]);
 
-  const capture = () => {
+  /**
+   * Take the burst and match it.
+   *
+   * On real hardware `captureFace()` returns frames but **no template** — the
+   * embedding model is not implemented — so a live capture would always land in
+   * the registration path. Until that model exists the match runs against the
+   * signed-in driver's enrolment, and the frame count and quality come from the
+   * camera when there is one. What is real today is the capture, the timing and
+   * every decision `verifyFace()` makes about the result.
+   */
+  const capture = async () => {
     setPhase('scanning');
     setResult(null);
     const mine = enrolmentFor(account.driverId);
     const template = simUnknown || !mine ? 'fp:unenrolled-' + Date.now() : mine.template;
+
+    const shot = status.ok ? await cam.captureFace(cameraRef, { frames: 9 }) : null;
     setTimeout(() => {
-      setResult(verifyFace(makeCapture({ template, quality: 0.9, frames: 9 }), candidates));
+      setResult(verifyFace(
+        makeCapture({
+          template,
+          quality: shot && shot.quality ? shot.quality : 0.9,
+          frames: shot && shot.frames ? shot.frames : 9,
+        }),
+        candidates
+      ));
       setPhase('done');
-    }, 1700);
+    }, shot ? 300 : 1700);
   };
 
   const matched = result && result.matched;
@@ -253,11 +345,21 @@ function IdentityStep({ account, bus, operator, onConfirm, onBack }) {
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 16 }}>
         <View style={{ flexGrow: 1, flexBasis: 260 }}>
           <Viewport
-            badge="FRONT CAM · SIMULATED"
+            badge={'FRONT CAM · ' + status.label}
             stamp={new Date().toLocaleTimeString()}
             tone={phase === 'scanning' ? C.sky : matched ? C.brand : result ? C.danger : null}
           >
-            <SyntheticFeed seed={3} night kind="face" />
+            {status.ok && cam.Camera ? (
+              <cam.Camera
+                ref={cameraRef}
+                device={device}
+                isActive
+                photo
+                style={{ width: '100%', height: '100%' }}
+              />
+            ) : (
+              <SyntheticFeed seed={3} night kind="face" />
+            )}
           </Viewport>
         </View>
 
@@ -390,35 +492,54 @@ function Register({ account, operator, result, onRegister, onRetry }) {
   );
 }
 
-/* ================================================== 3 · the breath test == */
-function AlcoholStep({ driver, bus, onResult, onCleared, onBack }) {
+/* ================================================== 3 · the breath test ==
+ * The analyser is a separate BLE unit in the cab. Nothing on this screen can
+ * produce a reading — the app asks the device for a sample, shows the driver it
+ * is waiting, and records whatever comes back. There is deliberately no gesture
+ * that maps to "blow".
+ */
+function AlcoholStep({ driver, bus, onResult, onLocked, onBack }) {
   const { C, S } = useTheme();
   const testRef = useRef(null);
+  const analyserRef = useRef(null);
+  const cancelRef = useRef(null);
   const [simDrunk, setSimDrunk] = useState(false);
-  if (!testRef.current) testRef.current = createBreathTest({ readCell: () => 0 });
 
+  if (!testRef.current) testRef.current = createBreathTest();
   const [st, setSt] = useState(() => testRef.current.state());
-  const [blowMs, setBlowMs] = useState(0);
 
   useEffect(() => {
-    testRef.current = createBreathTest({ readCell: () => (simDrunk ? 0.062 : 0) });
-    setSt(testRef.current.warmup(Date.now()));
+    analyserRef.current = createSimulatedAnalyser({
+      readings: simDrunk ? [0.062, 0.058, 0.055] : [0],
+      delayMs: 4200,
+    });
+    setSt({ ...testRef.current.pair(Date.now(), analyserRef.current.device) });
   }, [simDrunk]);
 
   useEffect(() => {
-    const id = setInterval(() => {
-      const t = Date.now();
-      setSt({ ...testRef.current.tick(t) });
-      setBlowMs(testRef.current.blowMs(t));
-    }, 100);
-    return () => clearInterval(id);
+    const id = setInterval(() => setSt({ ...testRef.current.tick(Date.now()) }), 200);
+    return () => {
+      clearInterval(id);
+      if (cancelRef.current) cancelRef.current();
+    };
   }, []);
 
   useEffect(() => { onResult(st); /* eslint-disable-next-line */ }, [st.state, st.attempts]);
 
-  const P = st.policy;
-  const blowing = st.state === 'blowing';
-  const progress = blowing ? Math.min(1, blowMs / P.minBlowMs) : 0;
+  const raised = useRef(false);
+  useEffect(() => {
+    if (st.locked && !raised.current) {
+      raised.current = true;
+      onLocked(st);
+    }
+  }, [st.locked, st, onLocked]);
+
+  const startAnalysis = () => {
+    setSt({ ...testRef.current.startAnalysis(Date.now()) });
+    cancelRef.current = analyserRef.current.sample((s) => {
+      setSt({ ...testRef.current.onDeviceResult(s, Date.now()) });
+    });
+  };
 
   if (st.locked) return <Lockout bus={bus} driver={driver} state={st} />;
 
@@ -426,8 +547,8 @@ function AlcoholStep({ driver, bus, onResult, onCleared, onBack }) {
     return (
       <View style={S.card}>
         <Head eyebrow="Step 3 · cleared" title="Clear to drive">
-          {st.result.bac === 0 ? 'No alcohol detected' : `${st.result.bac.toFixed(3)} %BAC`} · sample held{' '}
-          {(st.result.durationMs / 1000).toFixed(1)} s · logged against this shift.
+          {st.result.bac === 0 ? 'No alcohol detected' : `${st.result.bac.toFixed(3)} %BAC`} · reported by{' '}
+          {st.device ? st.device.name : 'the analyser'} · logged against this shift.
         </Head>
         <View style={[S.row, { gap: 16 }]}>
           <View style={{
@@ -448,27 +569,43 @@ function AlcoholStep({ driver, bus, onResult, onCleared, onBack }) {
             </View>
           </View>
         </View>
-        <View style={[S.row, { marginTop: 20 }]}>
-          <Text style={[S.hint, { marginBottom: 0 }]}>Immobiliser released. Drive safe.</Text>
-          <View style={{ flex: 1 }} />
-          <Btn kind="primary" size="lg" icon={IconArrow} onPress={onCleared}>Start shift</Btn>
-        </View>
+        <Text style={[S.hint, { marginTop: 18, marginBottom: 0 }]}>
+          Next: choose the bus and route for this shift.
+        </Text>
       </View>
     );
   }
 
+  const P = st.policy;
+  const analysing = st.state === 'analysing';
+  const failed = st.state === 'fail';
+  const fault = st.state === 'fault';
+
   return (
     <View style={S.card}>
-      <Head eyebrow="Step 3 · breath alcohol" title="Blow into the mouthpiece">
-        Steady breath, {P.minBlowMs / 1000}–{P.maxBlowMs / 1000} seconds, until the ring closes.
-        Fleet policy is {P.limitBac.toFixed(2)} %BAC — stricter than the {P.legalBac.toFixed(2)} %
-        statutory limit, because this seat carries passengers.
+      <Head
+        eyebrow="Step 3 · breath alcohol"
+        title={analysing ? 'Blow into the analyser' : 'Breath test'}
+      >
+        {analysing
+          ? 'Steady breath into the mouthpiece until the unit beeps. The reading comes from the analyser, not from this screen.'
+          : `The cabin analyser takes the reading. Fleet policy is ${P.limitBac.toFixed(2)} %BAC — stricter than the ${P.legalBac.toFixed(2)} % statutory limit, because this seat carries passengers.`}
       </Head>
 
-      <View style={{ alignItems: 'center', gap: 18 }}>
-        <BlowRing state={st.state} progress={progress} seconds={blowMs / 1000} result={st.result} />
+      <View style={{ alignItems: 'center', gap: 16 }}>
+        <AnalyserDial state={st.state} result={st.result} />
 
-        {st.state === 'fail' ? (
+        <View style={[S.row, { justifyContent: 'center', gap: 8 }]}>
+          <Chip tone={st.state === 'pairing' ? 'warn' : fault ? 'danger' : 'ok'}>
+            {(st.device ? st.device.name : 'ANALYSER') + ' · ' +
+              (st.state === 'pairing' ? 'PAIRING' : fault ? 'NO READING' : 'CONNECTED')}
+          </Chip>
+          {st.device && st.device.battery != null ? (
+            <Chip>BATTERY {Math.round(st.device.battery * 100)}%</Chip>
+          ) : null}
+        </View>
+
+        {failed ? (
           <View style={{
             flexDirection: 'row', gap: 8, padding: 12, borderRadius: 12,
             backgroundColor: C.dangerSoft, borderWidth: 1, borderColor: C.danger,
@@ -481,7 +618,11 @@ function AlcoholStep({ driver, bus, onResult, onCleared, onBack }) {
           </View>
         ) : null}
 
-        {st.result && st.result.valid === false ? <Chip tone="warn">{st.result.message}</Chip> : null}
+        {fault ? (
+          <Text style={[S.hint, { color: C.amber, textAlign: 'center', maxWidth: 420, marginBottom: 0 }]}>
+            {st.result.message} This does not count as an attempt.
+          </Text>
+        ) : null}
 
         <View style={[S.row, { justifyContent: 'center', gap: 12 }]}>
           <View style={{ flexDirection: 'row', gap: 7 }}>
@@ -499,30 +640,30 @@ function AlcoholStep({ driver, bus, onResult, onCleared, onBack }) {
           <Text style={S.eyebrow}>{st.attemptsLeft} of {P.maxAttempts} remaining</Text>
         </View>
 
-        {st.state === 'warmup' ? (
-          <Btn size="lg" disabled>Sensor warming up…</Btn>
-        ) : st.state === 'fail' ? (
+        {st.state === 'pairing' ? (
+          <Btn size="lg" disabled>Connecting to the analyser…</Btn>
+        ) : analysing ? (
+          <Btn size="lg" disabled icon={IconWind} style={{ minWidth: 260 }}>Waiting for the analyser…</Btn>
+        ) : failed || fault ? (
           <Btn kind="primary" size="lg" icon={IconRefresh} onPress={() => setSt({ ...testRef.current.retry(Date.now()) })}>
             Test again
           </Btn>
         ) : (
-          <Btn
-            kind={blowing ? 'danger' : 'primary'}
-            size="lg"
-            icon={IconWind}
-            style={{ minWidth: 260 }}
-            onPressIn={() => setSt({ ...testRef.current.startBlow(Date.now()) })}
-            onPressOut={() => setSt({ ...testRef.current.endBlow(Date.now()) })}
-          >
-            {blowing ? 'Keep blowing…' : 'Hold to blow'}
+          <Btn kind="primary" size="lg" icon={IconWind} style={{ minWidth: 260 }} onPress={startAnalysis}>
+            Start analysis
           </Btn>
         )}
       </View>
 
       <View style={[S.row, { marginTop: 20, borderTopWidth: 1, borderTopColor: C.line, paddingTop: 14 }]}>
-        <Btn kind="ghost" icon={IconBack} onPress={onBack}>Identity</Btn>
+        <Btn kind="ghost" icon={IconBack} onPress={onBack} disabled={analysing}>Identity</Btn>
         <View style={{ flex: 1 }} />
-        <TouchableOpacity style={[S.row, { gap: 8 }]} activeOpacity={0.7} onPress={() => setSimDrunk(!simDrunk)}>
+        <TouchableOpacity
+          style={[S.row, { gap: 8 }]}
+          activeOpacity={0.7}
+          disabled={analysing}
+          onPress={() => setSimDrunk(!simDrunk)}
+        >
           <View style={{
             width: 18, height: 18, borderRadius: 5, borderWidth: 1, borderColor: C.line3,
             backgroundColor: simDrunk ? C.danger : 'transparent',
@@ -530,21 +671,23 @@ function AlcoholStep({ driver, bus, onResult, onCleared, onBack }) {
           }}>
             {simDrunk ? <IconCheck size={12} color="#fff" /> : null}
           </View>
-          <Text style={{ color: C.fg3, fontSize: 11.5 }}>Sensor sim · alcohol present</Text>
+          <Text style={{ color: C.fg3, fontSize: 11.5 }}>Device sim · alcohol present</Text>
         </TouchableOpacity>
       </View>
     </View>
   );
 }
 
-function BlowRing({ state, progress, seconds, result }) {
+/* A waiting indicator, not a measurement: there is nothing to measure until the
+ * device speaks, so it pulses rather than fills. */
+function AnalyserDial({ state, result }) {
   const { C } = useTheme();
-  const size = 220;
-  const r = 98;
+  const size = 200;
+  const r = 90;
   const c = 2 * Math.PI * r;
-  const blowing = state === 'blowing';
-  const tone = state === 'fail' ? C.danger : blowing ? C.sky : C.brand;
-  const shown = state === 'fail' || state === 'pass' ? 1 : progress;
+  const analysing = state === 'analysing';
+  const pulse = usePulse(analysing);
+  const tone = state === 'fail' ? C.danger : state === 'fault' ? C.amber : analysing ? C.sky : C.brand;
 
   return (
     <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
@@ -553,27 +696,113 @@ function BlowRing({ state, progress, seconds, result }) {
           <Circle cx={size / 2} cy={size / 2} r={r} stroke={C.bg3} strokeWidth="10" fill="none" />
           <Circle
             cx={size / 2} cy={size / 2} r={r} stroke={tone} strokeWidth="10" fill="none"
-            strokeLinecap="round" strokeDasharray={`${c}`} strokeDashoffset={c * (1 - shown)}
+            strokeLinecap="round"
+            strokeDasharray={analysing ? `${c * 0.22} ${c}` : `${c}`}
+            strokeDashoffset={state === 'idle' || state === 'pairing' ? c : 0}
           />
         </G>
       </Svg>
-      <View style={{
-        width: 158, height: 158, borderRadius: 79, alignItems: 'center', justifyContent: 'center',
-        backgroundColor: C.bg2, borderWidth: 1, borderColor: C.line2,
-      }}>
+      <Animated.View
+        style={{
+          width: 144, height: 144, borderRadius: 72, alignItems: 'center', justifyContent: 'center',
+          backgroundColor: C.bg2, borderWidth: 1, borderColor: C.line2,
+          transform: [{ scale: analysing ? pulse.interpolate({ inputRange: [0, 1], outputRange: [0.94, 1.04] }) : 1 }],
+        }}
+      >
         <Text style={{
-          fontFamily: MONO, fontSize: 38, fontWeight: '700',
-          color: state === 'fail' ? C.danger : state === 'warmup' ? C.fg3 : C.fg,
+          fontFamily: MONO, fontSize: analysing ? 18 : 30, fontWeight: '700',
+          color: state === 'fail' ? C.danger : state === 'fault' ? C.amber : C.fg,
         }}>
-          {blowing ? seconds.toFixed(1) : state === 'fail' ? result.bac.toFixed(3) : state === 'warmup' ? '···' : '0.0'}
+          {analysing ? 'BLOW' : state === 'fail' ? result.bac.toFixed(3) : state === 'fault' ? '—' : state === 'pairing' ? '···' : '0.000'}
         </Text>
-        <Text style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: 1.4, color: C.fg3 }}>
-          {blowing ? 'SECONDS' : state === 'fail' ? '%BAC · FAIL' : state === 'warmup' ? 'WARMING' : 'READY'}
+        <Text style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: 1.4, color: C.fg3, marginTop: 4 }}>
+          {analysing ? 'NOW' : state === 'fail' ? '%BAC · FAIL' : state === 'fault' ? 'NO READING'
+            : state === 'pairing' ? 'PAIRING' : 'READY'}
         </Text>
+      </Animated.View>
+    </View>
+  );
+}
+
+/* ================================================ 4 · bus and route ====== */
+function AssignmentStep({ account, bus, driver, onConfirm, onBack }) {
+  const { C, S } = useTheme();
+  const fleet = useMemo(
+    () => forOperator(BUSES, bus ? bus.operatorId : account.operatorId),
+    [bus, account]
+  );
+  const [busId, setBusId] = useState(bus ? bus.id : (fleet[0] || {}).id);
+  const chosen = byId(BUSES, busId) || fleet[0];
+  const [routeId, setRouteId] = useState((chosen && chosen.routeId) || CORRIDOR_DEFS[0].id);
+
+  const pick = (id) => {
+    setBusId(id);
+    const b = byId(BUSES, id);
+    if (b && b.routeId) setRouteId(b.routeId);
+  };
+
+  const card = (on) => [{
+    flexGrow: 1, flexBasis: 220, padding: 13, borderRadius: 16,
+    borderWidth: 1, borderColor: on ? C.brand : C.line,
+    backgroundColor: on ? C.brandSoft : C.bg2,
+  }];
+
+  return (
+    <View style={S.card}>
+      <Head eyebrow="Step 4 · assignment" title="Which bus, and which route?">
+        You are cleared to drive. Confirm the vehicle you are taking out and the corridor you are
+        running — the corridor decides which road model is loaded before you move.
+      </Head>
+
+      <Text style={S.eyebrow}>Vehicle</Text>
+      <View style={[S.row, { marginTop: 10, gap: 10, alignItems: 'stretch' }]}>
+        {fleet.map((b) => (
+          <TouchableOpacity key={b.id} activeOpacity={0.85} onPress={() => pick(b.id)} style={card(b.id === busId)}>
+            <View style={[S.row, { justifyContent: 'space-between' }]}>
+              <Text style={S.plate}>{b.reg}</Text>
+              {bus && b.id === bus.id ? <Chip tone="ok">THIS UNIT</Chip> : null}
+            </View>
+            <Text style={[S.hint, { marginTop: 4, marginBottom: 0 }]}>{b.model}</Text>
+            <Text style={[S.hint, { marginBottom: 0 }]}>{b.service} · {b.seats} seats</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <Text style={[S.eyebrow, { marginTop: 20 }]}>Corridor</Text>
+      <View style={[S.row, { marginTop: 10, gap: 10, alignItems: 'stretch' }]}>
+        {CORRIDOR_DEFS.map((c) => {
+          const stale = !/today/.test(c.freshness || '');
+          return (
+            <TouchableOpacity key={c.id} activeOpacity={0.85} onPress={() => setRouteId(c.id)} style={card(c.id === routeId)}>
+              <Text style={[S.td, { fontWeight: '640' }]}>{c.name}</Text>
+              <Text style={[S.hint, { marginTop: 4, marginBottom: 0 }]}>
+                {c.lanes} lanes · {(c.length / 1000).toFixed(1)} km · {c.events.length} events
+              </Text>
+              <View style={[S.row, { marginTop: 8, gap: 5 }]}>
+                <Chip tone={stale ? 'warn' : 'ok'}>{stale ? 'STALE' : 'FRESH'} · {c.freshness}</Chip>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      <View style={[S.row, { marginTop: 20 }]}>
+        <Btn kind="ghost" icon={IconBack} onPress={onBack}>Breath test</Btn>
+        <View style={{ flex: 1 }} />
+        <Btn
+          kind="primary"
+          size="lg"
+          icon={IconArrow}
+          disabled={!chosen}
+          onPress={() => onConfirm({ busId: chosen.id, routeId })}
+        >
+          Start shift
+        </Btn>
       </View>
     </View>
   );
 }
+
 
 function Lockout({ bus, driver, state }) {
   const { C, S } = useTheme();

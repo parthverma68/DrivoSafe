@@ -27,13 +27,14 @@ import RouteEditorScreen from './screens/RouteEditorScreen.jsx';
 import AdminScreen from './screens/AdminScreen.jsx';
 import FleetScreen from './screens/FleetScreen.jsx';
 import FleetLiveScreen from './screens/FleetLiveScreen.jsx';
+import AttendanceScreen from './screens/AttendanceScreen.jsx';
 import GovernmentScreen from './screens/GovernmentScreen.jsx';
 import WelcomeScreen from './screens/WelcomeScreen.jsx';
 import LoginScreen from './screens/LoginScreen.jsx';
 import CheckinScreen from './screens/CheckinScreen.jsx';
 import { speech, storage } from './platform/index.js';
 import { ThemeProvider, NightOnly, useTheme } from './theme.js';
-import { useSession } from './session.js';
+import { useSession, useFleetLog } from './session.js';
 import {
   Avatar, Btn, Chip, ROLE_ICON, IconMap, IconBack, IconPower, IconSignOut, IconSun, IconMoon,
 } from './components/kit.jsx';
@@ -74,14 +75,23 @@ function Boot() {
 function Shell() {
   const { C, S, mode, toggle } = useTheme();
   const session = useSession();
+  const fleetLog = useFleetLog();
   const { account, role, pendingRole, setPendingRole, install, signIn, signOut, bindInstall, clearInstall } = session;
 
   const [surface, setSurface] = useState(null);
   const [voiceOn, setVoiceOn] = useState(true);
   const [shift, setShift] = useState(null);
   const [mirror, setMirror] = useState(null);
+  const [attendanceId, setAttendanceId] = useState(null);
 
-  const leaveShift = () => { setShift(null); setSurface(null); };
+  /* Ending a shift closes the attendance row rather than deleting it — the
+   * hours worked are the point of keeping it. */
+  const leaveShift = () => {
+    if (attendanceId) fleetLog.closeShift(attendanceId);
+    setAttendanceId(null);
+    setShift(null);
+    setSurface(null);
+  };
   const fullSignOut = () => { leaveShift(); setMirror(null); signOut(); };
 
   const frame = (children) => (
@@ -105,7 +115,15 @@ function Shell() {
         install={install}
         onBind={bindInstall}
         onRebind={clearInstall}
-        onCleared={({ shift: s }) => { setShift(s); setSurface('drive'); }}
+        onCleared={({ shift: s, attendance }) => {
+          if (attendance) {
+            fleetLog.openShift(attendance);
+            setAttendanceId(attendance.id);
+          }
+          setShift(s);
+          setSurface('drive');
+        }}
+        onLockout={(lockout, row) => fleetLog.raiseLockout(lockout, row)}
         onSignOut={fullSignOut}
       />
     );
@@ -235,7 +253,9 @@ function Shell() {
         </View>
 
         <View style={{ flex: 1 }}>
-          {current === 'fleet' && <FleetConsole account={account} onMirror={setMirror} />}
+          {current === 'fleet' && (
+            <FleetConsole account={account} fleetLog={fleetLog} onMirror={setMirror} />
+          )}
           {current === 'admin' && <AdminScreen />}
           {current === 'editor' && <RouteEditorScreen />}
           {current === 'gov' && <GovernmentScreen />}
@@ -252,13 +272,17 @@ function Shell() {
 
 /* Live operations and the slower insights view are two tabs over one tenancy —
  * the same split the web console makes. */
-function FleetConsole({ account, onMirror }) {
+function FleetConsole({ account, fleetLog, onMirror }) {
   const { S } = useTheme();
   const [tab, setTab] = useState('live');
   return (
     <View style={{ flex: 1 }}>
       <View style={[S.row, { paddingHorizontal: 14, paddingTop: 12, gap: 6 }]}>
-        {[{ id: 'live', label: 'Live operations' }, { id: 'insights', label: 'Insights' }].map((t) => (
+        {[
+          { id: 'live', label: 'Live operations' },
+          { id: 'attendance', label: 'Attendance' },
+          { id: 'insights', label: 'Insights' },
+        ].map((t) => (
           <TouchableOpacity
             key={t.id}
             style={[S.navBtn, tab === t.id && S.navBtnOn]}
@@ -269,9 +293,13 @@ function FleetConsole({ account, onMirror }) {
         ))}
       </View>
       <View style={{ flex: 1 }}>
-        {tab === 'live'
-          ? <FleetLiveScreen account={account} onMirror={onMirror} />
-          : <FleetScreen scopedOperatorId={account.role === 'admin' ? null : account.operatorId} />}
+        {tab === 'live' ? (
+          <FleetLiveScreen account={account} fleetLog={fleetLog} onMirror={onMirror} />
+        ) : tab === 'attendance' ? (
+          <AttendanceScreen account={account} fleetLog={fleetLog} />
+        ) : (
+          <FleetScreen scopedOperatorId={account.role === 'admin' ? null : account.operatorId} />
+        )}
       </View>
     </View>
   );

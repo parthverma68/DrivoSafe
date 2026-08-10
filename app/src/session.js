@@ -15,12 +15,17 @@
  * receives what it needs as props. Nothing reads identity out of a global.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ROLE_BY_ID, publicAccount, ACCOUNTS, deviceBySerial, byId, BUSES, profileFor, isCompact } from '@drivosafe/shared';
+import {
+  ROLE_BY_ID, publicAccount, ACCOUNTS, deviceBySerial, byId, BUSES,
+  profileFor, isCompact, seedAttendance, closeAttendance, resetLockout,
+} from '@drivosafe/shared';
 import { storage } from './platform/index.js';
 
 const K_SESSION = 'session';
 const K_INSTALL = 'install';
 const K_THEME = 'theme';
+const K_ATTENDANCE = 'attendance';
+const K_LOCKOUTS = 'lockouts';
 
 /* ------------------------------------------------------------- theme ----- */
 export function useTheme() {
@@ -85,6 +90,86 @@ export function useViewport() {
     portrait: size.height > size.width,
     phone: size.width < 700,
   };
+}
+
+/* ---------------------------------------------------------- fleet log ---- */
+/**
+ * Attendance rows and vehicle lockouts, persisted locally.
+ *
+ * This is the Fleet Service's write side, standing in for a server. It matters
+ * that it is *shared* rather than per-role: a driver who fails three breath
+ * tests in this browser raises a lockout that the operator, signing in
+ * afterwards in the same browser, can actually see and clear. Splitting the
+ * store per role would make the demo lie about the one flow that has two ends.
+ *
+ * Seeded with a fortnight of history on first run so the consoles are not empty
+ * before anyone has driven anything.
+ */
+export function useFleetLog() {
+  const [attendance, setAttendance] = useState(() => {
+    const saved = storage.get(K_ATTENDANCE, null);
+    if (saved && saved.length) return saved;
+    const seeded = seedAttendance();
+    storage.set(K_ATTENDANCE, seeded);
+    return seeded;
+  });
+
+  const [lockouts, setLockouts] = useState(() => storage.get(K_LOCKOUTS, []));
+
+  const write = useCallback((rows) => {
+    setAttendance(rows);
+    storage.set(K_ATTENDANCE, rows);
+  }, []);
+
+  const writeLocks = useCallback((rows) => {
+    setLockouts(rows);
+    storage.set(K_LOCKOUTS, rows);
+  }, []);
+
+  /** Open a shift. Returns the record so the caller can close it later by id. */
+  const openShift = useCallback((record) => {
+    setAttendance((prev) => {
+      const rows = [record].concat(prev);
+      storage.set(K_ATTENDANCE, rows);
+      return rows;
+    });
+    return record;
+  }, []);
+
+  const closeShift = useCallback((id, at = Date.now()) => {
+    setAttendance((prev) => {
+      const rows = prev.map((r) => (r.id === id ? closeAttendance(r, at) : r));
+      storage.set(K_ATTENDANCE, rows);
+      return rows;
+    });
+  }, []);
+
+  const raiseLockout = useCallback((lockout, attendanceRow) => {
+    setLockouts((prev) => {
+      const rows = [lockout].concat(prev);
+      storage.set(K_LOCKOUTS, rows);
+      return rows;
+    });
+    if (attendanceRow) openShift(attendanceRow);
+    return lockout;
+  }, [openShift]);
+
+  /**
+   * Clear a lock. The permission check is `resetLockout()` in the domain, not
+   * an `if` in a button handler — the same call the API will make.
+   */
+  const clearLockout = useCallback((id, account, note) => {
+    const target = lockouts.find((l) => l.id === id);
+    const result = resetLockout(target, account, { note });
+    if (!result.ok) return result;
+    writeLocks(lockouts.map((l) => (l.id === id ? result.lockout : l)));
+    return result;
+  }, [lockouts, writeLocks]);
+
+  return useMemo(
+    () => ({ attendance, lockouts, openShift, closeShift, raiseLockout, clearLockout, write }),
+    [attendance, lockouts, openShift, closeShift, raiseLockout, clearLockout, write]
+  );
 }
 
 /* ----------------------------------------------------------- session ----- */

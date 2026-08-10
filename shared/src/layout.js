@@ -83,6 +83,8 @@ export const TILE_TYPES = {
   amenities: { name: 'Amenities', desc: 'Petrol, rest stop, mechanic ahead' },
   traffic: { name: 'Traffic', desc: 'Vehicles ahead, lane and closing state' },
   'compliance-checks': { name: 'Checks', desc: 'Last event pass/fail' },
+  'road-scan': { name: 'Road scan', desc: 'Rear camera — corridor capture for later analysis' },
+  'driver-cam': { name: 'Driver camera', desc: 'Front camera — fatigue evidence clips' },
 };
 
 /* Ships out of the box: HUD anchor + the four tiles a driver actually acts on. */

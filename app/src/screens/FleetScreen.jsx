@@ -15,20 +15,27 @@
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  OPERATORS, DRIVERS, CORRIDOR_DEFS, getRoute, forOperator, byId,
+  OPERATORS, DRIVERS, BUSES, CORRIDOR_DEFS, getRoute, forOperator, byId,
   fleetSnapshot, fleetSummary, requestCabinClip, clipState, scopeOf,
+  attendanceForOperator, attendanceSummary, byNewest, ATTENDANCE_STATUS,
+  lockoutsForScope, openLockouts, lockoutNotice,
 } from '@drivosafe/shared';
 import FleetMap from '../components/FleetMap.jsx';
 import CameraView from '../components/CameraView.jsx';
 import {
   Avatar, Chip, Kpi, Gauge, Meter, Ring, EqBars, Empty, Segmented,
   IconCam, IconPlay, IconSearch, IconWheel, IconAlert, IconPin, IconRefresh, IconGauge,
+  IconCalendar, IconLock, IconCheck,
   toneClass, toneVar, scoreTone,
 } from '../components/ui.jsx';
 
-const TABS = [{ id: 'live', label: 'Live operations' }, { id: 'insights', label: 'Insights' }];
+const TABS = [
+  { id: 'live', label: 'Live operations' },
+  { id: 'attendance', label: 'Attendance' },
+  { id: 'insights', label: 'Insights' },
+];
 
-export default function FleetScreen({ account, onMirror }) {
+export default function FleetScreen({ account, onMirror, fleetLog }) {
   const scope = scopeOf(account);
   const isAdmin = account && account.role === 'admin';
 
@@ -72,6 +79,11 @@ export default function FleetScreen({ account, onMirror }) {
   const selected = records.find((r) => r.busId === selectedId) || null;
   const summary = fleetSummary(records);
 
+  /* Lockouts are not a tab. A bus immobilised at the depot gate is the most
+   * time-critical thing on this screen, so it sits above whatever the user was
+   * looking at until somebody clears it. */
+  const locks = fleetLog ? openLockouts(lockoutsForScope(fleetLog.lockouts, account)) : [];
+
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div className="row" style={{ padding: '14px 16px 0', gap: 12 }}>
@@ -105,6 +117,14 @@ export default function FleetScreen({ account, onMirror }) {
         ) : null}
       </div>
 
+      {locks.length ? (
+        <LockoutQueue
+          locks={locks}
+          account={account}
+          onReset={(id, note) => fleetLog.clearLockout(id, account, note)}
+        />
+      ) : null}
+
       {tab === 'live' ? (
         <LiveBoard
           records={filtered}
@@ -117,9 +137,271 @@ export default function FleetScreen({ account, onMirror }) {
           account={account}
           now={now}
         />
+      ) : tab === 'attendance' ? (
+        <Attendance
+          rows={fleetLog ? fleetLog.attendance : []}
+          operatorId={effectiveOperator}
+          scopeAll={scope.all}
+        />
       ) : (
         <Insights operatorId={effectiveOperator || OPERATORS[0].id} />
       )}
+    </div>
+  );
+}
+
+/* ========================================================= lockouts ====== */
+function LockoutQueue({ locks, account, onReset }) {
+  const [open, setOpen] = useState(locks[0] ? locks[0].id : null);
+  const [note, setNote] = useState('');
+  const [error, setError] = useState(null);
+
+  return (
+    <div style={{ padding: '12px 16px 0' }}>
+      {locks.map((l) => {
+        const bus = byId(BUSES, l.busId);
+        const driver = byId(DRIVERS, l.driverId);
+        const notice = lockoutNotice(l, { bus, driver, operator: byId(OPERATORS, l.operatorId) });
+        const expanded = open === l.id;
+        return (
+          <div key={l.id} className="card" style={{ borderColor: 'var(--danger)', marginBottom: 10 }}>
+            <div className="row" style={{ gap: 12 }}>
+              <div style={{
+                width: 40, height: 40, borderRadius: 12, flex: 'none',
+                display: 'grid', placeItems: 'center',
+                background: 'var(--danger)', color: '#fff',
+              }}>
+                <IconLock size={20} />
+              </div>
+              <div style={{ flex: 1, minWidth: 180 }}>
+                <div style={{ fontWeight: 650, fontSize: 14 }}>
+                  {bus ? bus.reg : l.busId} immobilised — breath test failed
+                </div>
+                <div className="dim" style={{ fontSize: 11.5, marginTop: 3 }}>
+                  {driver ? driver.name : l.driverId} · {l.attempts} attempts ·
+                  highest {l.worstBac.toFixed(3)} %BAC
+                  {l.overLegal ? ' · above the statutory limit' : ''} ·
+                  {' '}{new Date(l.raisedAt).toLocaleString('en-IN', { hour12: false })}
+                </div>
+              </div>
+              <Chip tone="danger" live>{l.code}</Chip>
+              <button onClick={() => { setOpen(expanded ? null : l.id); setError(null); }}>
+                {expanded ? 'Close' : 'Review & reset'}
+              </button>
+            </div>
+
+            {expanded ? (
+              <div style={{ marginTop: 14, borderTop: '1px solid var(--line)', paddingTop: 14 }}>
+                <div className="grid2">
+                  <div>
+                    <div className="eyebrow" style={{ marginBottom: 8 }}>Readings from the analyser</div>
+                    <table>
+                      <thead><tr><th>#</th><th>Reading</th><th className="num">Verdict</th></tr></thead>
+                      <tbody>
+                        {l.readings.map((r, i) => (
+                          <tr key={i}>
+                            <td className="mono">{i + 1}</td>
+                            <td className="mono t-danger">{r.bac.toFixed(3)} %BAC</td>
+                            <td className="num t-danger">{r.overLegal ? 'OVER STATUTORY' : 'OVER POLICY'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div>
+                    <div className="eyebrow" style={{ marginBottom: 8 }}>Notification</div>
+                    <div className="card tight" style={{ background: 'var(--surface-2)' }}>
+                      <div style={{ fontSize: 12, fontWeight: 600 }}>{notice.subject}</div>
+                      {notice.lines.map((line) => (
+                        <div key={line} className="dim" style={{ fontSize: 11, marginTop: 4, lineHeight: 1.5 }}>{line}</div>
+                      ))}
+                      <div className="row" style={{ marginTop: 10, gap: 6 }}>
+                        {l.notify.map((n) => (
+                          <Chip key={n.role} tone="warn">{n.role} · {n.state}</Chip>
+                        ))}
+                      </div>
+                      <p className="hint" style={{ margin: '10px 0 0' }}>
+                        Delivery is not implemented — see <code>docs/NOTIFICATIONS.md</code>. The event,
+                        its recipients and who may act on it are.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {error ? <div className="formerr" style={{ marginTop: 12 }}><IconAlert size={15} />{error}</div> : null}
+
+                <div className="field" style={{ marginTop: 14 }}>
+                  <label htmlFor={'note-' + l.id}>Reset note — what did you do about the driver?</label>
+                  <input
+                    id={'note-' + l.id}
+                    value={note}
+                    placeholder="Driver stood down, relief called."
+                    onChange={(e) => setNote(e.target.value)}
+                  />
+                </div>
+
+                <div className="row">
+                  <span className="dim" style={{ fontSize: 11.5, flex: 1 }}>
+                    Clearing this releases the immobiliser. Only you and a platform administrator can.
+                  </span>
+                  <button
+                    className="danger"
+                    onClick={() => {
+                      const r = onReset(l.id, note.trim() || null);
+                      if (!r.ok) { setError(r.message); return; }
+                      setError(null);
+                      setNote('');
+                    }}
+                  >
+                    <IconCheck size={15} /> Reset lockout
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ======================================================== attendance ===== */
+function Attendance({ rows, operatorId, scopeAll }) {
+  const [days, setDays] = useState(14);
+  const scoped = useMemo(
+    () => byNewest(attendanceForOperator(rows, scopeAll ? operatorId : operatorId)),
+    [rows, operatorId, scopeAll]
+  );
+  const windowed = useMemo(() => {
+    const cutoff = Date.now() - days * 86400000;
+    return scoped.filter((r) => new Date(r.checkinAt).getTime() >= cutoff);
+  }, [scoped, days]);
+
+  const summary = attendanceSummary(windowed);
+
+  /* Per-driver roll-up: the question an operator actually asks is "who is
+   * reliable", and a flat list of rows does not answer it. */
+  const perDriver = useMemo(() => {
+    const map = new Map();
+    windowed.forEach((r) => {
+      const cur = map.get(r.driverId) || { driverId: r.driverId, shifts: 0, late: 0, lockouts: 0, minutes: 0 };
+      if (r.status === 'locked-out') cur.lockouts += 1; else cur.shifts += 1;
+      if (r.late) cur.late += 1;
+      cur.minutes += r.durationMin || 0;
+      map.set(r.driverId, cur);
+    });
+    return [...map.values()].sort((a, b) => b.shifts - a.shifts);
+  }, [windowed]);
+
+  return (
+    <div className="console scroll">
+      <div className="row">
+        <h2 style={{ fontSize: 18 }}>Attendance</h2>
+        <Segmented
+          value={days}
+          onChange={setDays}
+          options={[{ id: 7, label: '7 days' }, { id: 14, label: '14 days' }, { id: 90, label: '90 days' }]}
+        />
+        <div className="spacer" />
+        <Chip><IconCalendar size={12} /> {windowed.length} records</Chip>
+      </div>
+
+      <div className="grid3">
+        <Kpi k="Shifts" v={summary.completed + summary.onDuty} d={`${summary.onDuty} on duty now`} />
+        <Kpi k="Punctuality" v={summary.punctuality + '%'} d={`${summary.late} late starts`} tone={'t-' + scoreTone(summary.punctuality)} />
+        <Kpi k="Hours logged" v={summary.hours} d="closed shifts only" />
+        <Kpi k="Turned away" v={summary.lockedOut} d="failed breath tests" tone={summary.lockedOut ? 't-danger' : ''} />
+        <Kpi k="Drivers" v={summary.drivers} d="appeared in this window" />
+      </div>
+
+      <div className="grid2">
+        <div className="panel">
+          <h3>By driver</h3>
+          <p className="hint">
+            Attendance is a by-product of the pre-drive gate, not a separate register: every row
+            below was produced by a face match and a breath reading, which is considerably harder
+            to sign on someone else's behalf.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Driver</th>
+                <th className="num">Shifts</th>
+                <th className="num">Late</th>
+                <th className="num">Hours</th>
+                <th className="num">Turned away</th>
+              </tr>
+            </thead>
+            <tbody>
+              {perDriver.length === 0 ? (
+                <tr><td colSpan={5} className="dim">No attendance in this window.</td></tr>
+              ) : perDriver.map((d) => {
+                const driver = byId(DRIVERS, d.driverId);
+                return (
+                  <tr key={d.driverId}>
+                    <td>
+                      <span className="row" style={{ gap: 8 }}>
+                        <Avatar name={driver ? driver.name : d.driverId} hue={driver ? driver.avatarHue : 200} size="sm" />
+                        {driver ? driver.name : d.driverId}
+                      </span>
+                    </td>
+                    <td className="num">{d.shifts}</td>
+                    <td className={'num' + (d.late ? ' t-warn' : '')}>{d.late}</td>
+                    <td className="num">{Math.round(d.minutes / 6) / 10}</td>
+                    <td className={'num' + (d.lockouts ? ' t-danger' : '')}>{d.lockouts}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="panel">
+          <h3>Recent check-ins</h3>
+          <p className="hint">Newest first — each row carries the evidence the gate produced.</p>
+          <div className="scroll" style={{ maxHeight: 420 }}>
+            <table>
+              <thead>
+                <tr><th>When</th><th>Driver</th><th>Bus</th><th>Gate</th><th className="num">Status</th></tr>
+              </thead>
+              <tbody>
+                {windowed.slice(0, 40).map((r) => {
+                  const driver = byId(DRIVERS, r.driverId);
+                  const bus = byId(BUSES, r.busId);
+                  const meta = ATTENDANCE_STATUS[r.status];
+                  return (
+                    <tr key={r.id}>
+                      <td className="mono" style={{ fontSize: 11 }}>
+                        {new Date(r.checkinAt).toLocaleString('en-IN', {
+                          day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false,
+                        })}
+                      </td>
+                      <td style={{ fontSize: 11.5 }}>{driver ? driver.name : r.driverId}</td>
+                      <td className="mono" style={{ fontSize: 11 }}>{bus ? bus.reg : r.busId}</td>
+                      <td style={{ fontSize: 11 }}>
+                        {r.identity ? (
+                          <span className="dim">face {(r.identity.confidence * 100).toFixed(0)}%</span>
+                        ) : <span className="dim">—</span>}
+                        {r.breath ? (
+                          <span className={r.breath.passed ? ' t-ok' : ' t-danger'}>
+                            {' · '}{r.breath.bac.toFixed(3)}
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className={'num ' + toneClass(meta.tone)} style={{ fontSize: 11 }}>
+                        {meta.label}{r.late ? ' · late' : ''}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ height: 8 }} />
     </div>
   );
 }

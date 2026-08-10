@@ -714,6 +714,37 @@ td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numer
 .blow-ring .big { font-family: var(--mono); font-size: 40px; font-weight: 700; line-height: 1; }
 .blow-ring .cap { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.14em; color: var(--fg-3); text-transform: uppercase; }
 
+/* while the app is waiting on the analyser the ring rotates rather than fills:
+   there is nothing to measure until the device speaks, and a filling bar would
+   imply the app can see the sample */
+.blow-ring.analysing svg { animation: spin 1.5s linear infinite; }
+@keyframes spin { to { transform: rotate(270deg); } }
+
+.blow-ring .wave { display: flex; align-items: center; gap: 4px; height: 42px; }
+.blow-ring .wave i {
+  width: 5px; border-radius: 3px; background: var(--sky);
+  animation: breathe-bar 1.1s var(--ease) infinite;
+}
+.blow-ring .wave i:nth-child(1) { height: 30%; animation-delay: 0s; }
+.blow-ring .wave i:nth-child(2) { height: 60%; animation-delay: 0.12s; }
+.blow-ring .wave i:nth-child(3) { height: 100%; animation-delay: 0.24s; }
+.blow-ring .wave i:nth-child(4) { height: 60%; animation-delay: 0.36s; }
+.blow-ring .wave i:nth-child(5) { height: 30%; animation-delay: 0.48s; }
+@keyframes breathe-bar {
+  0%, 100% { transform: scaleY(0.45); opacity: 0.5; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
+
+/* bus / corridor pickers on the assignment step */
+.pick-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+.pick {
+  display: block; text-align: left; white-space: normal;
+  padding: 13px; border-radius: var(--r-lg);
+  border: 1px solid var(--line); background: var(--surface-2);
+}
+.pick:hover { border-color: var(--line-3); background: var(--surface-2); }
+.pick.on { border-color: var(--brand); background: var(--brand-soft); box-shadow: 0 0 0 1px var(--brand) inset; }
+
 .attempt-dots { display: flex; gap: 7px; }
 .attempt-dots i {
   width: 26px; height: 5px; border-radius: 999px; background: var(--surface-3);

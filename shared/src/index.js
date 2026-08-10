@@ -39,8 +39,23 @@ export {
 
 export {
   ALCOHOL_POLICY, FACE_POLICY, CHECKIN_STEPS,
-  createBreathTest, createCheckinGate, verifyFace, makeCapture, failingCell,
+  createBreathTest, createSimulatedAnalyser, createCheckinGate, verifyFace, makeCapture,
 } from './checkin.js';
+
+export {
+  ATTENDANCE_STATUS, LATE_GRACE_MIN,
+  openAttendance, closeAttendance, lockedOutAttendance, attendanceSummary,
+  attendanceForDriver, attendanceForOperator, attendanceOn, byNewest, seedAttendance,
+} from './attendance.js';
+
+export {
+  RESET_ROLES, LOCKOUT_STATUS,
+  createLockout, resetLockout, openLockouts, lockoutsForScope, lockoutNotice, defaultCode,
+} from './lockouts.js';
+
+export {
+  CAMERAS, ANALYSIS_STATE, createClipRecorder, createShiftRecorders,
+} from './recording.js';
 
 export {
   busTelemetry, fleetSnapshot, fleetSummary, pointAlong,

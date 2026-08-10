@@ -7,24 +7,30 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BUSES, DRIVERS, OPERATORS, ENROLMENTS, byId, forOperator, deviceBySerial, DEVICES,
-  createBreathTest, createCheckinGate, verifyFace, makeCapture, ALCOHOL_POLICY,
-  enrolmentFor, makeShift,
+  BUSES, DRIVERS, OPERATORS, ENROLMENTS, CORRIDOR_DEFS, byId, forOperator,
+  deviceBySerial, DEVICES, createBreathTest, createSimulatedAnalyser, createCheckinGate,
+  verifyFace, makeCapture, enrolmentFor, makeShift, createLockout, lockedOutAttendance,
+  openAttendance,
 } from '@drivosafe/shared';
 import CameraView, { useCamera } from '../components/CameraView.jsx';
 import {
   Wordmark, Avatar, Chip, Meter, IconCheck, IconAlert, IconLock, IconFace, IconWind,
   IconChip, IconSun, IconMoon, IconSignOut, IconRefresh, IconArrow, IconBack, IconBus,
+  IconBluetooth,
 } from '../components/ui.jsx';
 
 const STEPS = [
   { id: 'vehicle', label: 'Vehicle' },
   { id: 'identity', label: 'Identity' },
   { id: 'alcohol', label: 'Breath test' },
+  { id: 'assignment', label: 'Bus & route' },
 ];
 
 export default function CheckinScreen(props) {
-  const { account, install, onBind, onRebind, onCleared, onSignOut, theme, onToggleTheme } = props;
+  const {
+    account, install, onBind, onRebind, onCleared, onSignOut, onLockout,
+    theme, onToggleTheme,
+  } = props;
 
   const gateRef = useRef(null);
   if (!gateRef.current) {
@@ -73,20 +79,74 @@ export default function CheckinScreen(props) {
             />
           ) : null}
 
-          {gate.step === 'alcohol' || gate.step === 'cleared' ? (
+          {gate.step === 'alcohol' ? (
             <AlcoholStep
               driver={resolveDriver(gate.driver, account)}
               bus={bus}
               onResult={(s) => push(gateRef.current.applyBreath(s))}
-              onCleared={() => onCleared({
-                shift: makeShift({
-                  driverId: (gate.driver && gate.driver.driverId) || account.driverId,
-                  busId: bus ? bus.id : 'bus-1',
-                  routeId: bus ? bus.routeId : undefined,
-                }),
-                driver: gate.driver,
-              })}
+              onLocked={(breath) => {
+                /* The lock leaves the cab. The operator and an administrator are
+                 * the only people who can clear it, so they are the ones told —
+                 * and the driver still gets an attendance row, because being
+                 * turned away is attendance data too. */
+                const driverId = (gate.driver && gate.driver.driverId) || account.driverId;
+                const busId = bus ? bus.id : 'bus-1';
+                const operatorId = bus ? bus.operatorId : account.operatorId;
+                const lockout = createLockout({
+                  busId,
+                  operatorId,
+                  driverId,
+                  deviceSerial: install ? install.serial : null,
+                  readings: breath.history.filter((h) => h.valid && !h.override),
+                });
+                onLockout(lockout, lockedOutAttendance({
+                  driverId, busId, operatorId,
+                  deviceSerial: install ? install.serial : null,
+                  lockCode: lockout.code,
+                  breath: {
+                    bac: lockout.worstBac,
+                    attempts: breath.attempts,
+                    passed: false,
+                    deviceId: breath.device ? breath.device.id : null,
+                  },
+                }));
+              }}
               onBack={() => push(gateRef.current.back())}
+            />
+          ) : null}
+
+          {gate.step === 'assignment' || gate.step === 'cleared' ? (
+            <AssignmentStep
+              account={account}
+              bus={bus}
+              driver={resolveDriver(gate.driver, account)}
+              onBack={() => push(gateRef.current.back())}
+              onConfirm={({ busId, routeId }) => {
+                const s = gateRef.current.confirmAssignment({ busId, routeId });
+                push(s);
+                const driverId = (gate.driver && gate.driver.driverId) || account.driverId;
+                const chosen = byId(BUSES, busId);
+                onCleared({
+                  shift: makeShift({ driverId, busId, routeId }),
+                  driver: gate.driver,
+                  attendance: openAttendance({
+                    driverId,
+                    busId,
+                    operatorId: chosen ? chosen.operatorId : account.operatorId,
+                    routeId,
+                    deviceSerial: install ? install.serial : null,
+                    identity: gate.driver,
+                    breath: gate.alcohol && gate.alcohol.result
+                      ? {
+                          bac: gate.alcohol.result.bac,
+                          attempts: gate.alcohol.attempts,
+                          passed: true,
+                          deviceId: gate.alcohol.result.deviceId,
+                        }
+                      : null,
+                  }),
+                });
+              }}
             />
           ) : null}
         </div>
@@ -435,55 +495,67 @@ function RegisterDriver({ account, operator, result, onRegister, onRetry }) {
   );
 }
 
-/* ================================================== 3 · the breath test == */
-function AlcoholStep({ driver, bus, onResult, onCleared, onBack }) {
+/* ================================================== 3 · the breath test ==
+ * The analyser is a separate BLE device in the cab. Nothing on this screen can
+ * produce a reading — the app asks the unit for a sample, shows the driver that
+ * it is waiting, and records whatever comes back. There is deliberately no
+ * gesture here that maps to "blow", because a gesture is exactly what somebody
+ * would perform with the mouthpiece in another person's mouth.
+ */
+function AlcoholStep({ driver, bus, onResult, onLocked, onBack }) {
   const testRef = useRef(null);
+  const analyserRef = useRef(null);
+  const cancelRef = useRef(null);
   const [simDrunk, setSimDrunk] = useState(false);
 
-  /* The cell is rebuilt when the simulated reading changes — a real unit has
-   * one cell for its life, but this is the only way to demonstrate the lockout
-   * path without anyone drinking. */
-  if (!testRef.current) testRef.current = createBreathTest({ readCell: () => 0 });
+  if (!testRef.current) testRef.current = createBreathTest();
 
   const [st, setSt] = useState(() => testRef.current.state());
-  const [blowMs, setBlowMs] = useState(0);
   const [now, setNow] = useState(Date.now());
 
-  const rebuild = (drunk) => {
-    testRef.current = createBreathTest({ readCell: () => (drunk ? 0.062 : 0) });
-    setSt(testRef.current.warmup(Date.now()));
-  };
+  /* The simulated unit stands in for the BLE adapter. Swapping it for the real
+   * one is a change of two lines here and none in @drivosafe/shared. */
+  useEffect(() => {
+    analyserRef.current = createSimulatedAnalyser({
+      readings: simDrunk ? [0.062, 0.058, 0.055] : [0],
+      delayMs: 4200,
+    });
+    setSt({ ...testRef.current.pair(Date.now(), analyserRef.current.device) });
+  }, [simDrunk]);
 
-  useEffect(() => { rebuild(simDrunk); /* eslint-disable-next-line */ }, [simDrunk]);
-
-  /* 100 ms poll: warms the cell, advances the blow ring and auto-ends a blow
-   * held past the ceiling. The machine itself keeps no timer. */
+  /* 200 ms poll: brings the cell up to temperature and gives up on a device
+   * that never answers. */
   useEffect(() => {
     const id = setInterval(() => {
       const t = Date.now();
       setNow(t);
-      const s = testRef.current.tick(t);
-      setSt({ ...s });
-      setBlowMs(testRef.current.blowMs(t));
-    }, 100);
-    return () => clearInterval(id);
+      setSt({ ...testRef.current.tick(t) });
+    }, 200);
+    return () => {
+      clearInterval(id);
+      if (cancelRef.current) cancelRef.current();
+    };
   }, []);
 
   useEffect(() => { onResult(st); /* eslint-disable-next-line */ }, [st.state, st.attempts]);
 
-  const start = () => { if (st.state === 'ready') setSt({ ...testRef.current.startBlow(Date.now()) }); };
-  const end = () => { if (st.state === 'blowing') setSt({ ...testRef.current.endBlow(Date.now()) }); };
-
-  /* Releasing outside the button must still end the blow. */
+  /* A lockout leaves the cab: the operator and an administrator are told, and
+   * only they can clear it. Raised once, on the transition. */
+  const raised = useRef(false);
   useEffect(() => {
-    const up = () => end();
-    window.addEventListener('pointerup', up);
-    window.addEventListener('pointercancel', up);
-    return () => {
-      window.removeEventListener('pointerup', up);
-      window.removeEventListener('pointercancel', up);
-    };
-  });
+    if (st.locked && !raised.current) {
+      raised.current = true;
+      onLocked(st);
+    }
+  }, [st.locked, st, onLocked]);
+
+  const startAnalysis = () => {
+    const t = Date.now();
+    setSt({ ...testRef.current.startAnalysis(t) });
+    cancelRef.current = analyserRef.current.sample((sample) => {
+      setSt({ ...testRef.current.onDeviceResult(sample, Date.now()) });
+    });
+  };
 
   if (st.locked) return <Lockout bus={bus} driver={driver} state={st} />;
 
@@ -494,8 +566,8 @@ function AlcoholStep({ driver, bus, onResult, onCleared, onBack }) {
           <span className="eyebrow">Step 3 · cleared</span>
           <h2 className="t-ok">Clear to drive</h2>
           <p>
-            {st.result && st.result.bac === 0 ? 'No alcohol detected' : `${st.result.bac.toFixed(3)} %BAC`} ·
-            sample held {(st.result.durationMs / 1000).toFixed(1)} s · logged against this shift.
+            {st.result.bac === 0 ? 'No alcohol detected' : `${st.result.bac.toFixed(3)} %BAC`} ·
+            reported by {st.device ? st.device.name : 'the analyser'} · logged against this shift.
           </p>
         </div>
         <div className="gate-body">
@@ -520,40 +592,43 @@ function AlcoholStep({ driver, bus, onResult, onCleared, onBack }) {
           </div>
         </div>
         <div className="gate-foot">
-          <span className="dim" style={{ fontSize: 11.5 }}>Immobiliser released. Drive safe.</span>
-          <div className="spacer" />
-          <button className="primary lg" onClick={onCleared}>Start shift <IconArrow size={16} /></button>
+          <span className="dim" style={{ fontSize: 11.5 }}>Next: choose the bus and route for this shift.</span>
         </div>
       </div>
     );
   }
 
   const P = st.policy;
-  const blowing = st.state === 'blowing';
-  const progress = blowing ? Math.min(1, blowMs / P.minBlowMs) : 0;
+  const analysing = st.state === 'analysing';
   const failed = st.state === 'fail';
-  const short = st.result && st.result.valid === false;
+  const fault = st.state === 'fault';
 
   return (
     <div className="gate-card">
       <div className="gate-head">
         <span className="eyebrow">Step 3 · breath alcohol</span>
-        <h2>Blow into the mouthpiece</h2>
+        <h2>{analysing ? 'Blow into the analyser' : 'Breath test'}</h2>
         <p>
-          Steady breath, {P.minBlowMs / 1000}–{P.maxBlowMs / 1000} seconds, until the ring closes.
-          Fleet policy is {P.limitBac.toFixed(2)} %BAC — stricter than the {P.legalBac.toFixed(2)} %
-          statutory limit, because this seat carries passengers.
+          {analysing
+            ? 'Steady breath into the mouthpiece until the unit beeps. The reading comes from the analyser, not from this screen.'
+            : `The cabin analyser takes the reading. Fleet policy is ${P.limitBac.toFixed(2)} %BAC — stricter than the ${P.legalBac.toFixed(2)} % statutory limit, because this seat carries passengers.`}
         </p>
       </div>
 
       <div className="gate-body">
         <div className="blow-wrap">
-          <BlowRing
-            state={st.state}
-            progress={progress}
-            seconds={blowMs / 1000}
-            result={st.result}
-          />
+          <AnalyserDial state={st.state} progress={testRef.current.waitProgress(now)} result={st.result} />
+
+          <div className="row" style={{ justifyContent: 'center', gap: 8 }}>
+            <Chip tone={st.state === 'pairing' ? 'warn' : fault ? 'danger' : 'ok'}>
+              <IconBluetooth size={12} />
+              {st.device ? st.device.name : 'ANALYSER'} ·{' '}
+              {st.state === 'pairing' ? 'PAIRING' : fault ? 'NO READING' : 'CONNECTED'}
+            </Chip>
+            {st.device && st.device.battery != null ? (
+              <Chip>BATTERY {Math.round(st.device.battery * 100)}%</Chip>
+            ) : null}
+          </div>
 
           {failed ? (
             <div className="formerr" style={{ marginBottom: 0 }}>
@@ -566,8 +641,10 @@ function AlcoholStep({ driver, bus, onResult, onCleared, onBack }) {
             </div>
           ) : null}
 
-          {short ? (
-            <div className="chip warn">{st.result.message}</div>
+          {fault ? (
+            <div className="chip warn" style={{ maxWidth: 420, whiteSpace: 'normal', lineHeight: 1.5, padding: '8px 12px' }}>
+              {st.result.message} This does not count as an attempt.
+            </div>
           ) : null}
 
           <div className="row" style={{ justifyContent: 'center', gap: 14 }}>
@@ -579,77 +656,84 @@ function AlcoholStep({ driver, bus, onResult, onCleared, onBack }) {
             <span className="eyebrow">{st.attemptsLeft} of {P.maxAttempts} remaining</span>
           </div>
 
-          {st.state === 'warmup' ? (
-            <button className="lg" disabled>Sensor warming up…</button>
-          ) : failed ? (
+          {st.state === 'pairing' ? (
+            <button className="lg" disabled>Connecting to the analyser…</button>
+          ) : analysing ? (
+            <button className="lg" disabled style={{ minWidth: 260 }}>
+              <IconWind size={18} /> Waiting for the analyser…
+            </button>
+          ) : failed || fault ? (
             <button className="primary lg" onClick={() => setSt({ ...testRef.current.retry(Date.now()) })}>
               <IconRefresh size={17} /> Test again
             </button>
           ) : (
-            <button
-              className={'primary lg' + (blowing ? ' danger' : '')}
-              onPointerDown={start}
-              disabled={st.state !== 'ready' && !blowing}
-              style={{ minWidth: 260 }}
-            >
-              <IconWind size={18} /> {blowing ? 'Keep blowing…' : 'Hold to blow'}
+            <button className="primary lg" onClick={startAnalysis} style={{ minWidth: 260 }}>
+              <IconWind size={18} /> Start analysis
             </button>
           )}
         </div>
       </div>
 
       <div className="gate-foot">
-        <button className="ghost" onClick={onBack}><IconBack size={15} /> Identity</button>
+        <button className="ghost" onClick={onBack} disabled={analysing}><IconBack size={15} /> Identity</button>
         <div className="spacer" />
-        <label className="row" style={{ fontSize: 11.5, color: 'var(--fg-3)', gap: 7 }} title="Stands in for the BLE breathalyser cell">
-          <input type="checkbox" checked={simDrunk} style={{ width: 16 }} onChange={(e) => setSimDrunk(e.target.checked)} />
-          <span>Sensor sim · alcohol present</span>
+        <label className="row" style={{ fontSize: 11.5, color: 'var(--fg-3)', gap: 7 }} title="Stands in for the BLE analyser's readings">
+          <input type="checkbox" checked={simDrunk} style={{ width: 16 }} onChange={(e) => setSimDrunk(e.target.checked)} disabled={analysing} />
+          <span>Device sim · alcohol present</span>
         </label>
       </div>
     </div>
   );
 }
 
-function BlowRing({ state, progress, seconds, result }) {
-  /* Drawn in a fixed 232-unit space and scaled by the viewBox, so the ring
-   * follows whatever size the stylesheet gives it — a phone shrinks it rather
-   * than having a fixed-size SVG spill out of its own container. */
+/* The dial is a *waiting* indicator, not a measurement: there is nothing to
+ * measure until the device speaks. While analysing it breathes rather than
+ * filling, so it never implies the app knows how the sample is going. */
+function AnalyserDial({ state, progress, result }) {
   const size = 232;
   const r = 104;
   const c = 2 * Math.PI * r;
-  const blowing = state === 'blowing';
-  const tone = state === 'fail' ? 'var(--danger)' : blowing ? 'var(--sky)' : 'var(--brand)';
+  const analysing = state === 'analysing';
+  const tone = state === 'fail' ? 'var(--danger)' : state === 'fault' ? 'var(--amber)'
+    : analysing ? 'var(--sky)' : 'var(--brand)';
 
   return (
-    <div className={'blow-ring' + (state === 'ready' ? ' armed' : '')}>
+    <div className={'blow-ring' + (state === 'ready' ? ' armed' : '') + (analysing ? ' analysing' : '')}>
       <svg viewBox={`0 0 ${size} ${size}`} width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--surface-3)" strokeWidth="10" />
         <circle
           cx={size / 2} cy={size / 2} r={r} fill="none" stroke={tone} strokeWidth="10"
-          strokeLinecap="round" strokeDasharray={c}
-          strokeDashoffset={c * (1 - (state === 'fail' || state === 'pass' ? 1 : progress))}
-          style={{ transition: 'stroke-dashoffset 0.12s linear' }}
+          strokeLinecap="round"
+          strokeDasharray={analysing ? `${c * 0.22} ${c}` : c}
+          strokeDashoffset={analysing ? 0 : c * (state === 'idle' || state === 'pairing' ? 1 : 0)}
+          className={analysing ? 'spin' : ''}
+          style={{ transition: analysing ? 'none' : 'stroke-dashoffset 0.4s var(--ease)' }}
         />
       </svg>
       <div className="core">
-        {blowing ? (
+        {analysing ? (
           <>
-            <div className="big mono">{seconds.toFixed(1)}</div>
-            <div className="cap">seconds</div>
+            <div className="wave" aria-hidden="true"><i /><i /><i /><i /><i /></div>
+            <div className="cap">blow now</div>
           </>
         ) : state === 'fail' ? (
           <>
             <div className="big mono t-danger">{result.bac.toFixed(3)}</div>
             <div className="cap">%BAC · fail</div>
           </>
-        ) : state === 'warmup' ? (
+        ) : state === 'fault' ? (
+          <>
+            <div className="big mono t-warn">—</div>
+            <div className="cap">no reading</div>
+          </>
+        ) : state === 'pairing' ? (
           <>
             <div className="big mono dim">···</div>
-            <div className="cap">warming</div>
+            <div className="cap">pairing</div>
           </>
         ) : (
           <>
-            <div className="big mono">0.0</div>
+            <div className="big mono">0.000</div>
             <div className="cap">ready</div>
           </>
         )}
@@ -657,6 +741,115 @@ function BlowRing({ state, progress, seconds, result }) {
     </div>
   );
 }
+
+/* ================================================ 4 · bus and route ====== */
+function AssignmentStep({ account, bus, driver, onConfirm, onBack }) {
+  /* A driver may only be assigned a vehicle inside their own operator. The
+   * bound unit's bus is the default because it is nearly always the right
+   * answer — but a relief driver moved to another vehicle in the yard has to be
+   * able to say so, and a route is a choice every shift. */
+  const fleet = useMemo(
+    () => forOperator(BUSES, bus ? bus.operatorId : account.operatorId),
+    [bus, account]
+  );
+  const [busId, setBusId] = useState(bus ? bus.id : (fleet[0] || {}).id);
+  const chosenBus = byId(BUSES, busId) || fleet[0];
+  const [routeId, setRouteId] = useState(
+    (chosenBus && chosenBus.routeId) || CORRIDOR_DEFS[0].id
+  );
+  const corridor = CORRIDOR_DEFS.find((c) => c.id === routeId) || CORRIDOR_DEFS[0];
+  const stale = !/today/.test(corridor.freshness || '');
+
+  const pickBus = (id) => {
+    setBusId(id);
+    const b = byId(BUSES, id);
+    if (b && b.routeId) setRouteId(b.routeId);
+  };
+
+  return (
+    <div className="gate-card">
+      <div className="gate-head">
+        <span className="eyebrow">Step 4 · assignment</span>
+        <h2>Which bus, and which route?</h2>
+        <p>
+          You are cleared to drive. Confirm the vehicle you are taking out and the corridor you
+          are running — the corridor decides which road model is loaded before you move.
+        </p>
+      </div>
+
+      <div className="gate-body">
+        <div className="eyebrow" style={{ marginBottom: 10 }}>Vehicle</div>
+        <div className="pick-grid">
+          {fleet.map((b) => (
+            <button
+              key={b.id}
+              className={'pick' + (b.id === busId ? ' on' : '')}
+              onClick={() => pickBus(b.id)}
+            >
+              <div className="row" style={{ justifyContent: 'space-between', gap: 8 }}>
+                <span className="mono" style={{ fontWeight: 700, fontSize: 13 }}>{b.reg}</span>
+                {b.id === (bus && bus.id) ? <Chip tone="ok">THIS UNIT</Chip> : null}
+              </div>
+              <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>{b.model}</div>
+              <div className="dim" style={{ fontSize: 11, marginTop: 2 }}>{b.service} · {b.seats} seats</div>
+              <div className="row" style={{ marginTop: 8, gap: 5 }}>
+                <Chip tone={b.dmsCamera ? 'ok' : 'warn'}>{b.dmsCamera ? 'DMS CAM' : 'CTX ONLY'}</Chip>
+                <Chip>{b.transmission}</Chip>
+              </div>
+            </button>
+          ))}
+        </div>
+
+        <div className="eyebrow" style={{ margin: '22px 0 10px' }}>Corridor</div>
+        <div className="pick-grid">
+          {CORRIDOR_DEFS.map((c) => {
+            const old = !/today/.test(c.freshness || '');
+            return (
+              <button
+                key={c.id}
+                className={'pick' + (c.id === routeId ? ' on' : '')}
+                onClick={() => setRouteId(c.id)}
+              >
+                <div style={{ fontWeight: 640, fontSize: 13 }}>{c.name}</div>
+                <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
+                  {c.lanes} lanes · {(c.length / 1000).toFixed(1)} km · {c.events.length} events
+                </div>
+                <div className="row" style={{ marginTop: 8, gap: 5 }}>
+                  <Chip tone={old ? 'warn' : 'ok'}>{old ? 'STALE' : 'FRESH'} · {c.freshness}</Chip>
+                  <Chip>v{c.version}</Chip>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        {stale ? (
+          <p className="hint" style={{ marginTop: 14, marginBottom: 0 }}>
+            This corridor was last scanned {corridor.freshness}. The advisory will run, and every
+            event it announces will carry its age — an old scan is worth having, as long as nobody
+            is told it is fresh.
+          </p>
+        ) : null}
+      </div>
+
+      <div className="gate-foot">
+        <button className="ghost" onClick={onBack}><IconBack size={15} /> Breath test</button>
+        <div className="spacer" />
+        <span className="dim" style={{ fontSize: 11.5 }}>
+          {driver.name} · {chosenBus ? chosenBus.reg : '—'}
+        </span>
+        <button
+          className="primary lg"
+          disabled={!chosenBus}
+          onClick={() => onConfirm({ busId: chosenBus.id, routeId })}
+        >
+          Start shift <IconArrow size={16} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 
 function Lockout({ bus, driver, state }) {
   const code = 'LK-' + String(bus ? bus.id : 'bus').toUpperCase().replace(/[^A-Z0-9]/g, '') + '-' +

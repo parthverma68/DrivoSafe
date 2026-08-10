@@ -24,7 +24,7 @@ import WelcomeScreen from './screens/WelcomeScreen.jsx';
 import LoginScreen from './screens/LoginScreen.jsx';
 import CheckinScreen from './screens/CheckinScreen.jsx';
 import { speech, presentation } from './platform/index.js';
-import { useSession, useTheme, useViewport } from './session.js';
+import { useSession, useTheme, useViewport, useFleetLog } from './session.js';
 import {
   Avatar, Chip, SURFACE_ICON, IconSun, IconMoon, IconSignOut, IconBack, IconPower,
 } from './components/ui.jsx';
@@ -33,12 +33,14 @@ export default function App() {
   const { theme, toggle: toggleTheme } = useTheme();
   const { compact } = useViewport();
   const session = useSession();
+  const fleetLog = useFleetLog();
   const { account, role, pendingRole, setPendingRole, install, signIn, signOut, bindInstall, clearInstall } = session;
 
   const [surface, setSurface] = useState(null);
   const [voiceOn, setVoiceOn] = useState(true);
   const [shift, setShift] = useState(null);          // set by the check-in gate
   const [mirror, setMirror] = useState(null);        // admin watching a live cab
+  const [attendanceId, setAttendanceId] = useState(null);
 
   const toggleVoice = () => {
     const next = !voiceOn;
@@ -55,6 +57,10 @@ export default function App() {
 
   const leaveShift = () => {
     presentation.exitDriveMode();
+    /* Ending a shift closes the attendance row rather than deleting it — the
+     * hours worked are the point of keeping it. */
+    if (attendanceId) fleetLog.closeShift(attendanceId);
+    setAttendanceId(null);
     setShift(null);
     setSurface(null);
   };
@@ -90,7 +96,16 @@ export default function App() {
         install={install}
         onBind={bindInstall}
         onRebind={clearInstall}
-        onCleared={({ shift: s }) => { enterDrive(); setShift(s); setSurface('drive'); }}
+        onCleared={({ shift: s, attendance }) => {
+          enterDrive();
+          if (attendance) {
+            fleetLog.openShift(attendance);
+            setAttendanceId(attendance.id);
+          }
+          setShift(s);
+          setSurface('drive');
+        }}
+        onLockout={(lockout, row) => fleetLog.raiseLockout(lockout, row)}
         onSignOut={fullSignOut}
         theme={theme}
         onToggleTheme={toggleTheme}
@@ -243,6 +258,7 @@ export default function App() {
           {current === 'fleet' && (
             <FleetScreen
               account={account}
+              fleetLog={fleetLog}
               onMirror={(r) => { enterDrive(); setMirror(r); }}
             />
           )}

@@ -142,3 +142,26 @@ For a production in-cab image (SYSTEM_DESIGN §17), set `KIOSK = true` in `src/A
 the surface switcher, then enrol the tablet as **device owner** via your MDM. The manifest
 already declares the landscape lock, `keepScreenOn`, the sensor permission set, and a
 `HOME`-category launcher intent so the app can be pinned as the launcher.
+
+
+## Cameras (react-native-vision-camera)
+
+`react-native-vision-camera` is a native dependency, so a JS-only run will not have it. The
+adapter in `src/platform/camera.js` guards the import: without the native module the app runs and
+every camera surface falls back to its synthetic feed, because a missing camera is a reported
+condition rather than a crash. To get the real thing:
+
+```bash
+npm install                       # already lists the dependency
+cd ios && pod install && cd ..    # iOS only
+npm run android                   # or npm run ios
+```
+
+Permissions are already declared — `android.permission.CAMERA` in `AndroidManifest.xml` and
+`NSCameraUsageDescription` in `Info.plist`. `RECORD_AUDIO` is **deliberately absent**: neither
+camera records an audio track. A microphone in a cab is a different product and a different
+consent.
+
+Minimum versions are already satisfied by this project (`minSdkVersion 24`, `compileSdkVersion 36`,
+Kotlin 2.1.20). If Gradle complains about the Kotlin version after an upgrade, it is
+VisionCamera's `kotlinVersion` extension it is reading — set it in `android/build.gradle`.

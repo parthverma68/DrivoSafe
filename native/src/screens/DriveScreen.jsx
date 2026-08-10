@@ -14,8 +14,10 @@ import { RoadHazardView, HIGH_QUALITY, ULTRA_QUALITY, EXTREME_QUALITY } from 're
 import {
   CORRIDOR_DEFS, getRoute, ACTIVE_SHIFT, BUSES, DRIVERS, byId,
   DEFAULT_LAYOUT, profileFor, layoutForProfile, isCompact, validate, LEVEL_META, useDriveLoop,
+  createShiftRecorders,
 } from '@drivosafe/shared';
 import { storage, driveIO } from '../platform/index.js';
+import * as cam from '../platform/camera.js';
 import { C, S, MONO, TONE_COLOR, alertStyle } from '../theme.js';
 import { Chip, Btn, Slider, Cycler } from '../components/ui.jsx';
 import TileGrid from '../components/TileGrid.jsx';
@@ -83,6 +85,43 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
   /* §11.2 safety rule: the grid is read-only in motion. The edit affordance is
    * not merely disabled — while moving it is gone, and any open edit session is
    * force-committed the moment the bus rolls. */
+  /* ---- the two cameras ----------------------------------------------------
+   * Both start with the shift and stop with it: the rear one captures the road
+   * surface continuously with chainage attached, the front one cuts a clip when
+   * the DMS worsens. Nothing is analysed on device — the models are not built
+   * (see shared/src/recording.js). A mirror does not record: a console watching
+   * this cab is not a second camera in it. */
+  const recordersRef = useRef(null);
+  if (!recordersRef.current) recordersRef.current = createShiftRecorders();
+  const [recorders, setRecorders] = useState(() => recordersRef.current.state());
+
+  useEffect(() => {
+    if (mirror) return undefined;
+    const rec = recordersRef.current;
+    rec.start(Date.now());
+    return () => rec.stop(Date.now());
+  }, [mirror]);
+
+  useEffect(() => {
+    if (mirror) return undefined;
+    const id = setInterval(() => {
+      recordersRef.current.tick(Date.now(), {
+        chainageM: state.progress,
+        lane: state.lane,
+        speedKph: state.speed,
+        dmsLevel: state.drowsiness.level,
+        routeId,
+        busId: shift.busId,
+        driverId: shift.driverId,
+      });
+      setRecorders(recordersRef.current.state());
+    }, 1000);
+    return () => clearInterval(id);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [mirror, routeId, shift.busId, shift.driverId]);
+
+  const tileState = useMemo(() => ({ ...state, recorders }), [state, recorders]);
+
   const stationary = state.speed < 1;
   useEffect(() => {
     if ((!stationary || compact) && editing) setEditing(false);
@@ -120,7 +159,10 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
 
   return (
     <View style={{ flex: 1, padding: 8, gap: 8 }}>
+      {mirror ? null : <RearCamera active={recorders.rear.recording} />}
+
       <StatusBar
+        recorders={mirror ? null : recorders}
         corridor={corridor}
         route={route}
         state={state}
@@ -136,7 +178,7 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
         setLayout={setLayout}
         profile={profile}
         editing={editing}
-        state={state}
+        state={tileState}
         route={route}
         onBreak={actions.takeBreak}
         hud={hud}
@@ -200,8 +242,49 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
   );
 }
 
+/* ---------- rear camera ----------
+ * The road-facing capture surface. VisionCamera needs a mounted <Camera> to
+ * record, and the driver must not have a second video window competing with the
+ * HUD for attention — so it is mounted at the edge of the screen, one pixel
+ * wide and transparent. The *disclosure* is not hidden: the status bar carries
+ * a REC chip whenever this is live, and the road-scan tile shows the clip count.
+ *
+ * Segment boundaries come from shared/src/recording.js, so the tablet and the
+ * browser build agree on clip length, buffering and eviction; this file only
+ * starts and stops the hardware.
+ */
+function RearCamera({ active }) {
+  const ref = useRef(null);
+  const device = cam.useCameraDevice('back');
+  const [permission, setPermission] = useState('unavailable');
+  const recorderRef = useRef(null);
+
+  useEffect(() => {
+    let alive = true;
+    if (!cam.available()) return undefined;
+    cam.requestPermission().then((p) => { if (alive) setPermission(p); });
+    return () => { alive = false; };
+  }, []);
+
+  const status = cam.cameraStatus(device, permission);
+
+  useEffect(() => {
+    if (!status.ok) return undefined;
+    if (!recorderRef.current) recorderRef.current = cam.createVideoRecorder(ref, {});
+    if (active) recorderRef.current.start();
+    return () => { if (recorderRef.current) recorderRef.current.stop(); };
+  }, [status.ok, active]);
+
+  if (!status.ok || !cam.Camera) return null;
+  return (
+    <View style={{ position: 'absolute', width: 1, height: 1, opacity: 0 }} pointerEvents="none">
+      <cam.Camera ref={ref} device={device} isActive={active} video style={{ width: 1, height: 1 }} />
+    </View>
+  );
+}
+
 /* ---------- status bar ---------- */
-function StatusBar({ corridor, route, state, bus, driver, stationary }) {
+function StatusBar({ corridor, route, state, bus, driver, stationary, recorders }) {
   const dms = state.drowsiness;
   const meta = LEVEL_META[dms.level] || LEVEL_META.D0;
   const stale = corridor && !/today/.test(corridor.freshness || '');
@@ -227,6 +310,15 @@ function StatusBar({ corridor, route, state, bus, driver, stationary }) {
         </Chip>
         <Chip tone={levelTone}>{dms.level} {meta.label}</Chip>
         <Chip>{stationary ? 'STATIONARY' : 'IN MOTION'}</Chip>
+        {/* Both cameras are disclosed on the status bar, always. A cab that
+            films the driver and does not say so is the version of this product
+            nobody should ship. */}
+        {recorders ? (
+          <>
+            <Chip tone="danger">REC ROAD {recorders.rear.clipCount}</Chip>
+            <Chip tone="warn">DMS CLIPS {recorders.front.clipCount}</Chip>
+          </>
+        ) : null}
         <Chip>SYNC QUEUED</Chip>
       </View>
     </ScrollView>

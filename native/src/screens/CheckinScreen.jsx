@@ -288,13 +288,12 @@ function IdentityStep({ account, bus, operator, onConfirm, onBack }) {
    * broken screen — the layout is identical either way. */
   const cameraRef = useRef(null);
   const device = cam.useCameraDevice('front');
-  const [permission, setPermission] = useState('unavailable');
-  useEffect(() => {
-    let alive = true;
-    if (!cam.available()) return undefined;
-    cam.requestPermission().then((p) => { if (alive) setPermission(p); });
-    return () => { alive = false; };
+  const [permission, setPermission] = useState('pending');
+  const askPermission = React.useCallback(() => {
+    if (!cam.available()) { setPermission('unavailable'); return; }
+    cam.requestPermission().then(setPermission);
   }, []);
+  useEffect(() => { askPermission(); }, [askPermission]);
   const status = cam.cameraStatus(device, permission);
 
   const candidates = useMemo(() => {
@@ -361,6 +360,23 @@ function IdentityStep({ account, bus, operator, onConfirm, onBack }) {
               <SyntheticFeed seed={3} night kind="face" />
             )}
           </Viewport>
+
+          {/* A synthetic feed is correct behaviour when there is no camera, but
+              it must never be indistinguishable from a working one. The reason
+              and its fix go on the screen. */}
+          {status.hint ? (
+            <View style={{
+              marginTop: 10, padding: 11, borderRadius: 12,
+              backgroundColor: C.amberSoft, borderWidth: 1, borderColor: C.amber,
+            }}>
+              <Text style={{ color: C.amber, fontSize: 11.5, lineHeight: 17 }}>{status.hint}</Text>
+              {status.fixable ? (
+                <View style={{ marginTop: 10, alignItems: 'flex-start' }}>
+                  <Btn onPress={askPermission}>Grant camera access</Btn>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
         </View>
 
         <View style={{ flexGrow: 1, flexBasis: 260 }}>

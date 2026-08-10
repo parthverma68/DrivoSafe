@@ -23,12 +23,35 @@
 import { Platform, PermissionsAndroid } from 'react-native';
 
 let VisionCamera = null;
+let moduleError = null;
 try {
   // eslint-disable-next-line global-require
   VisionCamera = require('react-native-vision-camera');
-} catch {
-  VisionCamera = null;               // JS-only bundle, or the pods aren't built
+} catch (e) {
+  /* VisionCamera's own entry throws `system/camera-module-not-found` when
+   * NativeModules.CameraView is absent — i.e. the JS is bundled but the native
+   * side is not in the installed binary. That is by far the most common cause,
+   * and it has exactly one fix: rebuild the app (`npm run android`, or
+   * `pod install && npm run ios`). Restarting Metro cannot help, because
+   * autolinking runs at Gradle/CocoaPods time, not at bundle time.
+   *
+   * The error is kept rather than swallowed: a silent fallback to a synthetic
+   * feed is correct behaviour but terrible diagnostics, and "why is my camera
+   * simulated" should be answerable from the screen. */
+  VisionCamera = null;
+  moduleError = e && e.message ? e.message : String(e);
+  if (__DEV__) {
+    console.warn(
+      '[DrivoSafe] Camera falling back to the synthetic feed: the native ' +
+      'VisionCamera module is not in this build. Rebuild the app — ' +
+      '`npm run android` (Android) or `cd ios && pod install && npm run ios`. ' +
+      'A Metro reload will not pick it up.\n  ' + moduleError
+    );
+  }
 }
+
+/** Why the native module is unavailable, if it is. Null when it loaded. */
+export const moduleFailure = () => moduleError;
 
 export const Camera = VisionCamera ? VisionCamera.Camera : null;
 export const useCameraDevice = VisionCamera ? VisionCamera.useCameraDevice : () => null;
@@ -149,10 +172,49 @@ export function createVideoRecorder(cameraRef, { onFile } = {}) {
   };
 }
 
-/** What the UI needs to describe the camera situation without guessing. */
+/**
+ * What the UI needs to describe the camera situation without guessing.
+ *
+ * Each state names its own fix. "Simulated" on its own is the least useful
+ * thing this could say, because all three failure modes look identical on
+ * screen and only one of them is something the user can do anything about.
+ */
 export function cameraStatus(device, permission) {
-  if (!VisionCamera) return { ok: false, reason: 'no-module', label: 'SIMULATED' };
-  if (permission !== 'granted') return { ok: false, reason: 'denied', label: 'PERMISSION NEEDED' };
-  if (!device) return { ok: false, reason: 'no-device', label: 'NO CAMERA' };
-  return { ok: true, reason: null, label: 'LIVE' };
+  if (!VisionCamera) {
+    return {
+      ok: false,
+      reason: 'no-module',
+      label: 'NATIVE MODULE MISSING',
+      hint: 'The camera library is in the JS bundle but not in this build. Rebuild the app — '
+        + (Platform.OS === 'ios'
+          ? 'cd ios && pod install, then npm run ios.'
+          : 'npm run android.')
+        + ' Reloading Metro will not pick it up: autolinking runs at build time.',
+      fixable: false,
+    };
+  }
+  if (permission === 'denied') {
+    return {
+      ok: false,
+      reason: 'denied',
+      label: 'PERMISSION NEEDED',
+      hint: 'Camera access has not been granted. On the in-cab unit this is granted at '
+        + 'provisioning by the MDM; on a hand-set-up device, grant it here.',
+      fixable: true,
+    };
+  }
+  if (permission !== 'granted') {
+    return { ok: false, reason: 'pending', label: 'REQUESTING ACCESS', hint: null, fixable: false };
+  }
+  if (!device) {
+    return {
+      ok: false,
+      reason: 'no-device',
+      label: 'NO CAMERA ON THIS DEVICE',
+      hint: 'No camera was reported for this facing. An emulator needs a webcam configured '
+        + 'in its AVD settings before it will report one.',
+      fixable: false,
+    };
+  }
+  return { ok: true, reason: null, label: 'LIVE', hint: null, fixable: false };
 }

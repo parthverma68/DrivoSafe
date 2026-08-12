@@ -130,8 +130,12 @@
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
+/* Mobile browser chrome makes 100vh taller than the visible page; dvh tracks
+   the real viewport as the address bar collapses. */
+@supports (height: 100dvh) { html, body, #root { height: 100dvh; } }
 
 body {
+  -webkit-tap-highlight-color: transparent;
   background: var(--bg);
   color: var(--fg);
   font-family: var(--sans);
@@ -710,6 +714,37 @@ td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numer
 .blow-ring .big { font-family: var(--mono); font-size: 40px; font-weight: 700; line-height: 1; }
 .blow-ring .cap { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.14em; color: var(--fg-3); text-transform: uppercase; }
 
+/* while the app is waiting on the analyser the ring rotates rather than fills:
+   there is nothing to measure until the device speaks, and a filling bar would
+   imply the app can see the sample */
+.blow-ring.analysing svg { animation: spin 1.5s linear infinite; }
+@keyframes spin { to { transform: rotate(270deg); } }
+
+.blow-ring .wave { display: flex; align-items: center; gap: 4px; height: 42px; }
+.blow-ring .wave i {
+  width: 5px; border-radius: 3px; background: var(--sky);
+  animation: breathe-bar 1.1s var(--ease) infinite;
+}
+.blow-ring .wave i:nth-child(1) { height: 30%; animation-delay: 0s; }
+.blow-ring .wave i:nth-child(2) { height: 60%; animation-delay: 0.12s; }
+.blow-ring .wave i:nth-child(3) { height: 100%; animation-delay: 0.24s; }
+.blow-ring .wave i:nth-child(4) { height: 60%; animation-delay: 0.36s; }
+.blow-ring .wave i:nth-child(5) { height: 30%; animation-delay: 0.48s; }
+@keyframes breathe-bar {
+  0%, 100% { transform: scaleY(0.45); opacity: 0.5; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
+
+/* bus / corridor pickers on the assignment step */
+.pick-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+.pick {
+  display: block; text-align: left; white-space: normal;
+  padding: 13px; border-radius: var(--r-lg);
+  border: 1px solid var(--line); background: var(--surface-2);
+}
+.pick:hover { border-color: var(--line-3); background: var(--surface-2); }
+.pick.on { border-color: var(--brand); background: var(--brand-soft); box-shadow: 0 0 0 1px var(--brand) inset; }
+
 .attempt-dots { display: flex; gap: 7px; }
 .attempt-dots i {
   width: 26px; height: 5px; border-radius: 999px; background: var(--surface-3);
@@ -774,7 +809,10 @@ td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numer
 }
 .map-shell svg { display: block; width: 100%; height: 100%; }
 .map-overlay { position: absolute; z-index: 4; }
-.map-overlay.tl { left: 12px; top: 12px; display: flex; gap: 8px; align-items: center; }
+.map-overlay.tl {
+  left: 12px; top: 12px; right: 52px;
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+}
 .map-overlay.tr { right: 12px; top: 12px; display: flex; gap: 8px; }
 .map-overlay.bl { left: 12px; bottom: 12px; display: flex; gap: 8px; align-items: center; }
 .map-overlay.br { right: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 6px; }
@@ -815,7 +853,7 @@ td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numer
 .eqbars i { flex: 1; border-radius: 2px; background: var(--line-2); min-height: 2px; }
 
 /* =============================================================== drive ==== */
-.drive { display: flex; flex-direction: column; height: 100%; padding: var(--gap); gap: var(--gap); }
+.drive { position: relative; display: flex; flex-direction: column; height: 100%; padding: var(--gap); gap: var(--gap); }
 
 .statusbar { display: flex; align-items: center; gap: 7px; flex: none; flex-wrap: wrap; }
 
@@ -939,3 +977,218 @@ td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numer
 
 .fade-in { animation: fade 0.3s var(--ease); }
 @keyframes fade { from { opacity: 0; transform: translateY(6px); } }
+
+
+/* ==========================================================================
+   Mobile
+   ==========================================================================
+   The consoles are information-dense by nature, so they are not squeezed —
+   they are re-stacked: the three-column operations board becomes one scrolling
+   column, the icon rail becomes a bottom bar within thumb reach, and anything
+   that only exists to fill desk-width space is dropped rather than shrunk to
+   an unreadable size.
+
+   The drive screen is the exception and gets its own grid entirely — see the
+   `compact` profile in @drivosafe/shared/layout.js. */
+
+/* ---- phones and small tablets, either orientation ---- */
+@media (max-width: 900px) {
+  :root { --gap: 9px; }
+
+  /* iOS Safari zooms the page when a focused field is under 16px. Growing the
+     field is cheaper than fighting the zoom, and a 16px target is easier to
+     hit on glass anyway. */
+  input, select, textarea { font-size: 16px; padding: 11px 12px; }
+
+  /* the rail moves to the bottom: a top-left rail is out of thumb reach on a
+     phone, and iOS puts its own gesture bar under a bottom row of 44px targets.
+     `order` rather than column-reverse — a reversed column spills its overflow
+     off the TOP of the screen, which takes the header with it. */
+  .app { flex-direction: column; }
+  .main { order: 1; min-height: 0; }
+  .rail {
+    order: 2;
+    flex: none;
+    width: 100%;
+    flex-direction: row;
+    justify-content: space-around;
+    align-items: center;
+    gap: 2px;
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    border-right: none;
+    border-top: 1px solid var(--line);
+  }
+  .rail-mark { display: none; }
+  .rail .spacer { display: none; }
+  .rail-item { width: 46px; height: 42px; }
+  .rail-item.on::before { left: 12px; right: 12px; top: -6px; bottom: auto; width: auto; height: 3px; border-radius: 0 0 3px 3px; }
+  .rail-item span.tip { display: none; }
+
+  .topbar { height: 52px; padding: 0 12px; gap: 9px; }
+  /* the header must never push its own controls off the edge: the title is the
+     only thing allowed to shrink, and it ellipsises rather than wrapping */
+  .topbar .title {
+    font-size: 14px; min-width: 0; flex: 1;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .topbar .title small { display: none; }
+  .topbar > button, .topbar > .userchip, .topbar > .avatar { flex: none; }
+  .userchip { padding: 4px; }
+  .userchip .who { display: none; }
+
+  .console { padding: 12px; gap: 12px; }
+  .console-head h2 { font-size: 17px; }
+  .grid2 { grid-template-columns: 1fr; }
+  .grid3 { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 9px; }
+  .kpi { padding: 12px; }
+  .kpi .v { font-size: 23px; }
+
+  /* the operations board: one scrolling column, map at a fixed useful height */
+  .ops {
+    display: block;
+    height: auto;
+    min-height: 100%;
+    overflow: auto;
+    padding: 10px;
+  }
+  .ops-col { display: block; margin-bottom: 12px; }
+  .ops-list { max-height: none; overflow: visible; }
+  .ops-list .bus-row { margin-bottom: 8px; }
+  .map-shell { height: 300px; margin-bottom: 12px; }
+  .screen.nopad { overflow: auto; }
+
+  /* tables scroll inside their card rather than stretching the page */
+  .panel table, .card table { display: block; overflow-x: auto; white-space: nowrap; }
+
+  /* onboarding */
+  .stage-bar { height: auto; min-height: 58px; padding: 10px 14px; flex-wrap: wrap; }
+  .stage-body { padding: 6px 14px 30px; align-items: flex-start; }
+  .welcome-hero { margin-bottom: 22px; }
+  .welcome-hero p { font-size: 13.5px; }
+  .role-grid { grid-template-columns: 1fr; gap: 10px; }
+  .role-card { padding: 16px; border-radius: 18px; }
+  .role-card .ico { width: 40px; height: 40px; margin-bottom: 12px; }
+  .role-card p { min-height: 0; }
+
+  .login { grid-template-columns: 1fr; box-shadow: var(--shadow-2); }
+  .login-aside { display: none; }
+  .login-form { padding: 22px; }
+
+  .gate-head { padding: 18px 16px 0; }
+  .gate-head h2 { font-size: 19px; }
+  .gate-body { padding: 16px; }
+  .gate-foot { padding: 12px 16px; flex-wrap: wrap; }
+  .gate-foot .spacer { flex-basis: 100%; height: 0; }
+  .gate-foot button.primary { flex: 1; }
+
+  .stepper { margin-bottom: 18px; }
+  .stepper .lbl { display: none; }
+  .stepper .rule { margin: 0 8px; }
+
+  .blow-ring { width: 180px; height: 180px; }
+  .blow-ring .core { width: 130px; height: 130px; }
+  .blow-ring .big { font-size: 31px; }
+  .lockout { padding: 20px 14px; }
+  .lockout h2 { font-size: 21px; }
+  .lockout .code { font-size: 16px; letter-spacing: 0.16em; }
+
+  .toast { bottom: calc(70px + env(safe-area-inset-bottom)); }
+}
+
+/* ---- narrow phones ---- */
+@media (max-width: 560px) {
+  /* status chips are the first thing to go — they restate what the surface
+     already shows, and the controls beside them do not */
+  .topbar > .chip { display: none; }
+  /* in the cab the title is the driver's own name, confirmed a minute ago at
+     the identity step. The avatar is enough; the controls need the width. */
+  .topbar.cab .title { display: none; }
+  .welcome-hero h1 { font-size: 27px; }
+  .kpi .v { font-size: 21px; }
+  .subnav { width: 100%; }
+  .subnav button { flex: 1; padding: 7px 8px; font-size: 12px; }
+  .gauge-grid { grid-template-columns: 1fr 1fr; }
+  .demo-accounts .row { flex-direction: column; align-items: stretch; }
+  .demo-pill { justify-content: flex-start; }
+}
+
+/* ==========================================================================
+   Drive screen — the compact (phone) profile
+   ==========================================================================
+   4x3: the HUD takes a 3x3 block and the column beside it carries speed & gear,
+   next hazard and trip score. Chrome shrinks so the road keeps the pixels. */
+.drive.compact { padding: 7px; gap: 7px; }
+.drive.compact .statusbar { gap: 5px; overflow-x: auto; flex-wrap: nowrap; }
+.drive.compact .statusbar .chip { flex: none; }
+.drive.compact .alertbar { padding: 7px 10px; font-size: 11.5px; border-radius: 12px; }
+.drive.compact .alertbar .prio { font-size: 8px; padding: 2px 6px; }
+.drive.compact .tile { padding: 8px 9px; border-radius: 12px; }
+.drive.compact .tile-title { font-size: 8px; letter-spacing: 0.1em; margin-bottom: 4px; }
+.drive.compact .tile-hero { font-size: 25px; }
+.drive.compact .tile-hero.sm { font-size: 18px; }
+.drive.compact .tile-sub { font-size: 10px; margin-top: 3px; }
+.drive.compact .tile-note { font-size: 8px; }
+/* portrait tiles are tall; centring their content leaves a hole under the
+   title, so compact portrait reads top-down instead */
+@media (orientation: portrait) {
+  .drive.compact .tile-body { justify-content: flex-start; }
+}
+.drive.compact .p0-overlay h1 { font-size: 27px; }
+.drive.compact .p0-overlay p { font-size: 15px; }
+
+/* the sensor sim collapses to a corner button and opens as a sheet */
+.sim-fab {
+  position: absolute; right: 10px; bottom: 10px; z-index: 60;
+  width: 42px; height: 42px; padding: 0; border-radius: 50%;
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.08em;
+  background: var(--glass); backdrop-filter: blur(10px);
+  border: 1px dashed var(--line-3); color: var(--fg-2);
+  box-shadow: var(--shadow-2);
+}
+.tray.sheet {
+  position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 61;
+  max-height: 62%; overflow: auto;
+  background: var(--glass); backdrop-filter: blur(18px);
+  box-shadow: var(--shadow-pop);
+}
+
+/* rotate prompt — shown when a phone stays portrait on the drive screen */
+.rotate-prompt {
+  position: fixed; inset: 0; z-index: 150;
+  background: var(--bg);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 16px; text-align: center; padding: 30px;
+}
+.rotate-prompt h2 { font-size: 21px; }
+.rotate-prompt p { color: var(--fg-2); font-size: 13.5px; line-height: 1.6; max-width: 320px; }
+.phone-glyph {
+  width: 62px; height: 104px; border-radius: 12px;
+  border: 2px solid var(--brand); position: relative;
+  animation: tilt 2.2s var(--ease) infinite;
+}
+.phone-glyph i {
+  position: absolute; left: 50%; bottom: 7px; transform: translateX(-50%);
+  width: 22px; height: 3px; border-radius: 2px; background: var(--brand);
+}
+@keyframes tilt {
+  0%, 40% { transform: rotate(0deg); }
+  70%, 100% { transform: rotate(-90deg); }
+}
+
+/* A phone held landscape is very short: the drive chrome has to give way. */
+@media (max-height: 460px) and (orientation: landscape) {
+  .topbar { height: 44px; }
+  .topbar .title small { display: none; }
+  .drive.compact .statusbar { display: none; }
+  .stage-body { padding-top: 4px; }
+
+  /* a 390px-tall viewport has no room for a 180px dial plus its chrome */
+  .blow-ring { width: 132px; height: 132px; }
+  .blow-ring .core { width: 96px; height: 96px; }
+  .blow-ring .big { font-size: 23px; }
+  .blow-ring .cap { font-size: 8px; }
+  .blow-wrap { gap: 12px; }
+  .gate-head h2 { font-size: 17px; }
+  .gate-head p { font-size: 12px; }
+  .viewport { aspect-ratio: 16 / 9; }
+}

@@ -7,8 +7,13 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { RoadHazardView, ULTRA_QUALITY, HIGH_QUALITY, EXTREME_QUALITY } from 'react-road-hazards';
-import { CORRIDOR_DEFS, getRoute, ACTIVE_SHIFT, BUSES, DRIVERS, byId, DEFAULT_LAYOUT, validate, LEVEL_META, useDriveLoop } from '@drivosafe/shared';
-import { storage, driveIO } from '../platform/index.js';
+import {
+  CORRIDOR_DEFS, getRoute, ACTIVE_SHIFT, BUSES, DRIVERS, byId,
+  DEFAULT_LAYOUT, layoutForProfile, validate, LEVEL_META, useDriveLoop,
+  createShiftRecorders,
+} from '@drivosafe/shared';
+import { storage, driveIO, presentation } from '../platform/index.js';
+import { useViewport } from '../session.js';
 import TileGrid from '../components/TileGrid.jsx';
 
 const QUALITY = { HIGH: HIGH_QUALITY, ULTRA: ULTRA_QUALITY, EXTREME: EXTREME_QUALITY };
@@ -47,11 +52,19 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
   const bus = byId(BUSES, shift.busId);
   const driver = byId(DRIVERS, shift.driverId);
 
-  const [layout, setLayoutState] = useState(() =>
+  /* On a phone the grid is a different grid, not a smaller one (§11.2
+   * profiles): the HUD plus speed & gear, next hazard and trip score. It is
+   * fixed, so the driver's saved tablet dashboard is neither loaded nor
+   * overwritten while they are on a handset. */
+  const { profile, compact, portrait } = useViewport();
+
+  const [savedLayout, setSavedLayout] = useState(() =>
     validate(storage.get('layout:' + shift.driverId, DEFAULT_LAYOUT))
   );
+  const layout = compact ? layoutForProfile(profile) : savedLayout;
   const setLayout = (l) => {
-    setLayoutState(l);
+    if (compact) return;
+    setSavedLayout(l);
     storage.set('layout:' + shift.driverId, l);
   };
 
@@ -65,8 +78,8 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
    * force-committed the moment the bus rolls. */
   const stationary = state.speed < 1;
   useEffect(() => {
-    if (!stationary && editing) setEditing(false);
-  }, [stationary, editing]);
+    if ((!stationary || compact) && editing) setEditing(false);
+  }, [stationary, editing, compact]);
 
   const hudRef = useRef(null);
   const [hudSize, setHudSize] = useState({ w: 640, h: 400 });
@@ -82,6 +95,47 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
 
   const dms = state.drowsiness;
   const critical = dms.level === 'D4';
+
+  /* ---- the two cameras ----------------------------------------------------
+   * Both start with the shift and stop with it. The rear one captures the road
+   * surface continuously with chainage attached; the front one cuts a clip when
+   * the DMS worsens. Neither is analysed here — the models are not built, and
+   * §11.x is explicit that what matters first is capturing labelled evidence a
+   * model can be pointed at later. A mirror does not record: an admin watching
+   * a cab from a desk is not a second camera in that cab. */
+  const recordersRef = useRef(null);
+  if (!recordersRef.current) recordersRef.current = createShiftRecorders();
+  const [recorders, setRecorders] = useState(() => recordersRef.current.state());
+
+  useEffect(() => {
+    if (mirror) return undefined;
+    const rec = recordersRef.current;
+    rec.start(Date.now());
+    return () => rec.stop(Date.now());
+  }, [mirror]);
+
+  useEffect(() => {
+    if (mirror) return undefined;
+    const id = setInterval(() => {
+      recordersRef.current.tick(Date.now(), {
+        chainageM: state.progress,
+        lane: state.lane,
+        speedKph: state.speed,
+        dmsLevel: state.drowsiness.level,
+        routeId,
+        busId: shift.busId,
+        driverId: shift.driverId,
+        light: localHour >= 6 && localHour <= 18 ? 'day' : 'night',
+      });
+      setRecorders(recordersRef.current.state());
+    }, 1000);
+    return () => clearInterval(id);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [mirror, routeId, shift.busId, shift.driverId, localHour]);
+
+  /* The tiles read the recorder state off the same object the drive loop
+   * publishes, so a camera tile is fed exactly like every other tile. */
+  const tileState = useMemo(() => ({ ...state, recorders }), [state, recorders]);
 
   const hud = (
     <div ref={hudRef} style={{ width: '100%', height: '100%' }}>
@@ -112,7 +166,7 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
   );
 
   return (
-    <div className="drive">
+    <div className={'drive' + (compact ? ' compact' : '')}>
       <StatusBar
         corridor={corridor}
         route={route}
@@ -120,6 +174,8 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
         bus={bus}
         driver={driver}
         stationary={stationary}
+        compact={compact}
+        recorders={mirror ? null : recorders}
       />
 
       <AlertBar alert={state.alert} />
@@ -127,14 +183,16 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
       <TileGrid
         layout={layout}
         setLayout={setLayout}
+        profile={profile}
         editing={editing}
-        state={state}
+        state={tileState}
         route={route}
         onBreak={actions.takeBreak}
         hud={hud}
       />
 
       {mirror ? null : <SimStrip
+        compact={compact}
         corridorId={routeId}
         setCorridorId={setRouteId}
         running={running}
@@ -154,6 +212,13 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
         stationary={stationary}
         state={state}
       />}
+
+      {/* Orientation is requested at the tap that starts the shift, but no
+          browser guarantees it — iOS has no lock at all. When the phone stays
+          portrait the screen says so rather than rendering a 4x3 grid into a
+          column, and stays dismissible because a driver who cannot rotate
+          still needs the advisory. */}
+      {compact && portrait ? <RotatePrompt /> : null}
 
       {critical ? (
         <div className="p0-overlay">
@@ -190,10 +255,54 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
 }
 
 /* ---------- status bar ---------- */
-function StatusBar({ corridor, route, state, bus, driver, stationary }) {
+function StatusBar({ corridor, route, state, bus, driver, stationary, compact, recorders }) {
   const dms = state.drowsiness;
   const meta = LEVEL_META[dms.level] || LEVEL_META.D0;
   const stale = corridor && !/today/.test(corridor.freshness || '');
+
+  const level = (
+    <span
+      className={
+        'chip ' +
+        (meta.tone === 'critical' ? 'critical' : meta.tone === 'danger' ? 'danger' : meta.tone === 'warn' ? 'warn' : 'ok')
+      }
+    >
+      {dms.level} {meta.label}
+    </span>
+  );
+
+  /* A phone status bar carries only what changes a decision: which road, who is
+   * driving, and the driver's state. The rest is diagnostics for a mounted
+   * tablet with room for them. */
+  /* Both cameras are disclosed on the status bar, always. A cab that films the
+   * driver and does not say so is the version of this product nobody should
+   * ship — and the same chip doubles as the fault indicator when a camera
+   * drops out. */
+  const rec = recorders ? (
+    <>
+      <span className="chip danger" title="Rear camera — corridor capture, analysed later">
+        <i className="dot live" /> REC ROAD {recorders.rear.clipCount}
+      </span>
+      <span className="chip warn" title="Front camera — clips cut on fatigue events only">
+        DMS CLIPS {recorders.front.clipCount}
+      </span>
+    </>
+  ) : null;
+
+  if (compact) {
+    return (
+      <div className="statusbar">
+        <span className="chip ok">{route.name}</span>
+        <span className="chip">{bus ? bus.reg : 'no bus'}</span>
+        {recorders ? (
+          <span className="chip danger"><i className="dot live" /> REC</span>
+        ) : null}
+        <span className="spacer" />
+        {level}
+      </div>
+    );
+  }
+
   return (
     <div className="statusbar">
       <span className="chip ok">{route.name}</span>
@@ -211,15 +320,9 @@ function StatusBar({ corridor, route, state, bus, driver, stationary }) {
       <span className={'chip ' + (dms.mode === 'full' ? 'ok' : 'warn')}>
         DMS {dms.mode === 'full' ? 'CAM' : 'CTX'}
       </span>
-      <span
-        className={
-          'chip ' +
-          (meta.tone === 'critical' ? 'critical' : meta.tone === 'danger' ? 'danger' : meta.tone === 'warn' ? 'warn' : 'ok')
-        }
-      >
-        {dms.level} {meta.label}
-      </span>
+      {level}
       <span className="chip">{stationary ? 'STATIONARY' : 'IN MOTION'}</span>
+      {rec}
       <span className="chip">SYNC QUEUED</span>
     </div>
   );
@@ -245,16 +348,47 @@ function AlertBar({ alert }) {
   );
 }
 
+/* ---------- rotate prompt (phones only) ---------- */
+function RotatePrompt() {
+  const [dismissed, setDismissed] = useState(false);
+  if (dismissed) return null;
+  return (
+    <div className="rotate-prompt">
+      <div className="phone-glyph" aria-hidden="true"><i /></div>
+      <h2>Turn your phone sideways</h2>
+      <p>
+        The drive screen is a landscape surface — the road ahead needs the width.
+        If your rotation lock is on, switch it off.
+      </p>
+      <button className="primary lg" onClick={() => setDismissed(true)}>Continue anyway</button>
+    </div>
+  );
+}
+
 /* ---------- simulator strip (not shipped to the cab) ---------- */
 function SimStrip(props) {
   const {
     corridorId, setCorridorId, running, setRunning, timeScale, setTimeScale,
     fatigueDial, setFatigueDial, compliant, setCompliant, quality, setQuality,
-    localHour, setLocalHour, editing, setEditing, stationary, state,
+    localHour, setLocalHour, editing, setEditing, stationary, state, compact,
   } = props;
 
+  /* On a phone the sim controls are a sheet rather than a strip: they are a
+   * demo affordance, and they must not cost the HUD a third of the screen. */
+  const [open, setOpen] = useState(false);
+  if (compact && !open) {
+    return (
+      <button className="sim-fab" onClick={() => setOpen(true)} title="Sensor simulator">
+        SIM
+      </button>
+    );
+  }
+
   return (
-    <div className="tray" style={{ borderStyle: 'dashed' }}>
+    <div className={'tray' + (compact ? ' sheet' : '')} style={{ borderStyle: 'dashed' }}>
+      {compact ? (
+        <button className="quiet" onClick={() => setOpen(false)} style={{ order: 99 }}>CLOSE</button>
+      ) : null}
       <span className="mono dim" style={{ fontSize: 9, letterSpacing: '0.11em' }}>
         SENSOR SIM
       </span>
@@ -306,13 +440,15 @@ function SimStrip(props) {
         {Object.keys(QUALITY).map((q) => <option key={q}>{q}</option>)}
       </select>
 
-      <button
-        onClick={() => setEditing(!editing)}
-        disabled={!stationary}
-        title={stationary ? 'Rearrange tiles' : 'Layout editing is disabled in motion (§11.2)'}
-      >
-        {editing ? 'DONE' : 'EDIT LAYOUT'}
-      </button>
+      {compact ? null : (
+        <button
+          onClick={() => setEditing(!editing)}
+          disabled={!stationary}
+          title={stationary ? 'Rearrange tiles' : 'Layout editing is disabled in motion (§11.2)'}
+        >
+          {editing ? 'DONE' : 'EDIT LAYOUT'}
+        </button>
+      )}
 
       <span className="spacer" />
       <span className="mono dim" style={{ fontSize: 9 }}>

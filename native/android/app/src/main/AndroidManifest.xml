@@ -8,9 +8,19 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
-    <!-- Driver-facing NIR camera for the DMS (§8.2). Frames never leave the
-         device and are never persisted (§8.8). -->
+    <!-- Both cameras (§8.2, §11.x). FRONT: driver identity at the pre-drive
+         gate, then fatigue-evidence clips. REAR: continuous road capture for
+         corridor re-scanning. DMS frames never leave the device and are never
+         persisted (§8.8); rear clips are of a public road and are uploaded, and
+         front clips are event-only, retention-bounded and access-logged. -->
     <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- Segmented video capture writes to app-private storage; no audio track
+         is recorded from either camera, so RECORD_AUDIO is deliberately absent.
+         A microphone in a cab is a different product and a different consent. -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
 
     <!-- OBD-II dongle over BLE (§4.2) -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
@@ -23,6 +33,7 @@
 
     <!-- A dash-mounted tablet, not a phone -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.front" android:required="false" />
     <uses-feature android:name="android.hardware.location.gps" android:required="true" />
     <supports-screens
         android:largeScreens="true"

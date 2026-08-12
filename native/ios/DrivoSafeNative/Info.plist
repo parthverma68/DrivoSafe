@@ -34,6 +34,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>DrivoSafe uses the front camera to confirm the driver at the start of a shift and to record short clips when fatigue is detected, and the rear camera to record the road surface for corridor mapping.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string></string>
 	<key>UILaunchStoryboardName</key>

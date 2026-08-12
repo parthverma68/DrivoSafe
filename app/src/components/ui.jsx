@@ -137,6 +137,29 @@ export const IconChip = svg(
     <path d="M10 3.5v3M14 3.5v3M10 17.5v3M14 17.5v3M3.5 10h3M3.5 14h3M17.5 10h3M17.5 14h3" />
   </>
 );
+export const IconBluetooth = svg(
+  <>
+    <path d="m7 8 10 8-5 4V4l5 4-10 8" />
+  </>
+);
+export const IconCalendar = svg(
+  <>
+    <rect x="3.5" y="5" width="17" height="15.5" rx="2.5" />
+    <path d="M3.5 10h17M8 3v4M16 3v4" />
+  </>
+);
+export const IconRoad = svg(
+  <>
+    <path d="M8 3 5 21M16 3l3 18" />
+    <path d="M12 4v3M12 10.5v3M12 17v3" />
+  </>
+);
+export const IconRec = svg(
+  <>
+    <circle cx="12" cy="12" r="8.5" />
+    <circle cx="12" cy="12" r="3.6" fill="currentColor" stroke="none" />
+  </>
+);
 export const IconGauge = svg(
   <>
     <path d="M4 17a8 8 0 1 1 16 0" />

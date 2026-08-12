@@ -735,6 +735,75 @@ completely independent of layout.
 Layout persists per driver and syncs to the cloud, so it follows them across buses. Adding a new
 tile type is one new consumer of the existing payload — no new data plumbing.
 
+
+**Grid profiles.** A phone is not a small tablet. Nine info tiles on a 6-inch screen is nine
+things nobody can read at 80 km/h, so a handset gets a *different* grid rather than the same one
+scaled down:
+
+| Profile | Grid | Anchor | Tiles | Editable |
+|---|---|---|---|---|
+| `full` — mounted tablet | 5 × 3 | 3 × 2 | driver's choice, up to 9 | yes, stationary only |
+| `compact` — phone, landscape | 4 × 3 | 3 × 3 | speed & gear · next hazard · trip score | **no** |
+| `compact-portrait` — phone, portrait | 3 × 3 | 3 × 2 | the same three, in a row under the HUD | **no** |
+
+The reduced set is the three things a driver acts on: what the bus is doing, what is coming, and
+how they are scoring against it. Both phone profiles keep the HUD on the screen's widest edge —
+three of four columns in landscape, the full width in portrait.
+
+The compact layouts are deliberately **not** editable, and are neither loaded from nor written to
+the driver's saved dashboard. On the tablet a driver arranges their own screen because there is
+room to; on a phone the reduced set *is* the design, and dragging the HUD into a corner of a
+screen that size would defeat the anchor rule rather than express it.
+
+The profile is chosen from the live viewport (`profileFor(width, height)`), so a rotation or a
+window resize re-lays the grid without a reload. The anchor invariants above hold in every
+profile — the same `validate()` runs, against that profile's dimensions.
+
+**Orientation.** The drive surface is landscape. The tablet pins it at the OS level
+(`android:screenOrientation="sensorLandscape"`), which is stronger than anything JS can do. A
+phone browser has to ask, and the request must come from inside a user gesture, so it hangs off
+the tap that starts the shift — fullscreen, then `screen.orientation.lock('landscape')`. Both are
+best-effort: iOS Safari has no orientation lock at all, and a rotation-locked device refuses it
+everywhere. Failure is not an error state — the screen asks the driver to rotate, the prompt is
+dismissible, and the portrait profile renders a usable dashboard for someone who cannot.
+
+### 11.2b Cameras and the clip queue
+
+Two cameras run for the whole shift, and **neither of them analyses anything yet.**
+
+| | Rear / road-facing | Front / driver-facing |
+|---|---|---|
+| Mode | continuous, 30 s segments | event-triggered only |
+| Starts | shift start | shift start |
+| Cut by | the segment clock | a DMS level *rising* to D2 or worse |
+| Clip window | the segment | 8 s pre-roll + 4 s post-roll |
+| Retention | 72 h | 30 days (§12.4) |
+| Upload | routine, on depot wifi | on request, audited |
+
+The AI is not implemented — not the surface segmentation on the rear feed, not the ocular
+pipeline behind the DMS. What *is* implemented is the part that has to come first: capturing the
+evidence, labelling it with chainage, lane, speed, light and DMS level, bounding it so a 64 GB
+tablet does not fill, and queueing it for the sync agent. A model can be pointed at a labelled
+clip queue later; it cannot be pointed at footage that was never kept, or kept without its
+chainage. Every clip carries `analysis: 'pending-model'`, which is the honest state.
+
+The pre-roll is why the front camera has to already be running: the interesting eight seconds are
+the ones *before* anything fired.
+
+The two feeds are deliberately different shapes, and the reason is §8.8. The rear camera films a
+public road, so it runs continuously and uploads routinely. The front camera films a person, so
+it is event-only, retention-bounded and access-logged. Neither camera's frames reach the
+drowsiness engine — that boundary is a module boundary and stays one.
+
+**Disclosure is not optional.** The cab status bar carries a REC chip for the rear feed and a clip
+count for the front one whenever they are live. A cab that films its driver and does not say so is
+the version of this product nobody should ship. A console mirroring a cab does *not* record: an
+administrator at a desk is not a second camera in that vehicle.
+
+Implementation: `shared/src/recording.js` (pure — segment boundaries, metadata, ring buffer) and
+`native/src/platform/camera.js` (VisionCamera; guarded so a JS-only bundle still runs, because a
+missing camera is a reported condition rather than a crash).
+
 ### 11.3 Route-event mapping pipeline
 
 Turns raw scans into corridor events. One call: `buildRouteEvents(routeGeoJSON, detectionsGeoJSON, opts)`.
@@ -925,6 +994,43 @@ same shape the Identity Service will return from `/v1/auth/*` and `/v1/devices/*
 plaintext there because there is no server to hash them on; `authenticate()` is the only place a
 credential is compared, and replacing its body with a `fetch` is the entire migration.
 
+### 12.6 Attendance and lockouts
+
+**Attendance is a by-product, not a feature.** A depot register is a sheet signed by whoever is
+holding the pen. The pre-drive gate already knows who the driver is (face match), that they were
+fit to drive (analyser reading), which vehicle they took and when — so writing it down costs
+nothing and is far harder to fake than a signature.
+
+```
+Attendance { id, date, driverId, busId, operatorId, routeId, deviceSerial,
+             status: on-duty | completed | locked-out | absent,
+             checkinAt, shiftStart, shiftEnd, durationMin, late, lateByMin,
+             identity: { status, confidence }, breath: { bac, attempts, passed } }
+```
+
+A record opens when the assignment step confirms and closes when the shift ends. A driver who was
+turned away still gets one — `locked-out` is attendance data too, and it is the single most
+useful row to lose.
+
+**Lockouts leave the cab.** Three failed readings raise an event addressed to two people who are
+not in the vehicle:
+
+```
+Lockout { id, busId, operatorId, driverId, code, status: open | reset,
+          attempts, worstBac, overLegal, readings[], notify[], resetBy, resetAt, resetNote }
+```
+
+`resetLockout(lockout, account)` is the only way out, and it refuses four things: a role outside
+`['operator', 'admin']`, an operator reaching into another tenant's fleet, a second reset of an
+already-cleared lock, and — explicitly — a reset by the driver it was raised against. Every
+reading is copied onto the event rather than summarised, because the person clearing it is making
+a judgement and cannot make it from a paraphrase.
+
+Delivery of the notification is **not implemented**; see `docs/NOTIFICATIONS.md` for the intended
+design. What exists is the event, its evidence, its recipients and the rules about who may act —
+which is the half that decides whether the feature is safe, rather than the half that decides
+whether it is convenient.
+
 ---
 
 ## 13. Screens
@@ -953,24 +1059,34 @@ in this order, because each narrows the question the next one asks.
    driver at 04:00 with a legitimate licence must be able to take the bus out, and what they
    cannot do is skip the record. Too few frames or a dark lens is a *capture* verdict, never an
    identity one.
-3. **Breath alcohol.** A 5–8 s blow. Fleet policy is 0.01 %BAC — tighter than the 0.03 %
-   statutory limit, because this seat carries passengers; the statutory figure is recorded
-   alongside for the incident report.
+3. **Breath alcohol.** The analyser is a **separate BLE device** in the cab, and that is the
+   whole design of this stage. The app has no gesture that produces a reading: it shows *start
+   analysis*, asks the unit for a sample, sits in `analysing` while the driver blows, and records
+   what comes back. A button the driver holds is a button they can hold with the mouthpiece in
+   somebody else's mouth.
 
-   - A blow **shorter than 5 s is not an attempt.** Counting it would let a shaky first try burn
-     a third of the driver's budget for a reason that says nothing about their sobriety, and that
-     is the easiest way to make a safety device something drivers learn to route around.
-   - A blow past 8 s is **truncated, not rejected** — the cell is saturated and the extra seconds
-     carry no signal.
+   Fleet policy is 0.01 %BAC — tighter than the 0.03 % statutory limit, because this seat carries
+   passengers; the statutory figure is recorded alongside for the incident report.
+
+   - **The device decides whether a blow was a usable sample** — it is the thing with the flow
+     sensor. A rejected sample is a *fault*, not an attempt: it is not evidence about the driver.
+   - **A device that never answers is also a fault.** After 45 s the app gives up and says so.
+     Counting that against the driver would punish them for a flat battery.
    - **Three failed readings lock the vehicle.** The immobiliser stays engaged, a lock code is
-     displayed, the depot supervisor and the operator are notified with the readings, and the
-     driver cannot clear it — only a supervisor override can, and the override is itself recorded
-     in the attempt history.
+     displayed, and a `lockout.raised` event leaves the cab addressed to the operator and a
+     platform administrator (§12.6). The driver cannot clear it — the reset roles do not include
+     `driver`, and a reset by the driver the lock was raised against is refused explicitly.
 
-- **States.** `vehicle` · `identity` · `alcohol` · `cleared`; breath sub-states `idle` ·
-  `warmup` · `ready` · `blowing` · `analysing` · `pass` · `fail` · `locked`.
-- **Where it lives.** `shared/src/checkin.js` — pure, injected wall-clock, no camera and no
-  timers of its own, so the tablet and a console replaying the same shift count attempts
+4. **Assignment.** Which bus and which corridor. Last, because there is no point choosing a route
+   for a driver who is not going to be allowed to drive. The bound unit's vehicle is the default
+   and nearly always right, but a relief driver moved to another bus in the yard has to be able to
+   say so, and the corridor decides which road model is loaded before the wheels turn. Confirming
+   it opens the attendance record and starts the shift.
+
+- **States.** `vehicle` · `identity` · `alcohol` · `assignment` · `cleared`; breath sub-states
+  `idle` · `pairing` · `ready` · `analysing` · `pass` · `fail` · `fault` · `locked`.
+- **Where it lives.** `shared/src/checkin.js` — pure, injected wall-clock, no camera, no BLE and
+  no timers of its own, so the tablet and a console replaying the same shift count attempts
   identically. Covered by `checkin.test.js`.
 
 ### 13.1 Drive screen — tablet, the product
@@ -1043,9 +1159,17 @@ overlay is visible in the mirror but cannot be acknowledged from a desk (§9.3).
 Cabin video is *requested*, never streamed: the tablet uploads the last N seconds when it next
 has bandwidth, and every request records who asked, when, and why (§16.3).
 
+**Attendance** — punctuality, hours, and who was turned away, per driver and per check-in, over a
+7/14/90-day window (§12.6). Every row carries the face confidence and the breath reading that
+produced it.
+
 **Insights** — the slower questions: fleet RQI, advisory compliance %, fuel saved, harsh events /
 1000 km; corridor condition heatmap (lanes × chainage); Captain Score leaderboard; value-stack
 table; RideScore composition.
+
+**Open lockouts sit above all three tabs**, not inside one. A bus immobilised at the depot gate is
+the most time-critical thing this console knows, and the two people who can clear it are exactly
+the two who open it.
 
 States: `loading` · `loaded` · `empty` (no vehicle reporting) · `stale` (freshness > 1 day →
 flagged) · `camera-offline` (DMS degraded to context-only, shown as a condition, not an error).

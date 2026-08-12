@@ -113,6 +113,42 @@ export function watchPosition(onFix, onError) {
   return () => navigator.geolocation.clearWatch(id);
 }
 
+/* ---- presentation: orientation and fullscreen ----------------------------
+ * The cab is a landscape surface. On a tablet that is the mount; on a phone it
+ * has to be asked for, and both requests are gated behind a user gesture by
+ * every browser — so this is called from the tap that starts the shift, never
+ * on mount.
+ *
+ * Both calls are best-effort by design. iOS Safari has no orientation lock at
+ * all, and a locked device refuses it everywhere. Failure is not an error
+ * state: the drive screen falls back to asking the driver to rotate, and works
+ * either way. The RN sibling is a no-op — the tablet's manifest pins
+ * `sensorLandscape` at the OS level, which is stronger than anything JS can do.
+ */
+export const presentation = {
+  async enterDriveMode(el) {
+    const node = el || document.documentElement;
+    try {
+      if (node.requestFullscreen) await node.requestFullscreen({ navigationUI: 'hide' });
+      else if (node.webkitRequestFullscreen) node.webkitRequestFullscreen();
+    } catch { /* denied, or already fullscreen */ }
+    try {
+      const o = screen.orientation;
+      if (o && o.lock) await o.lock('landscape');
+    } catch { /* unsupported (iOS), or the device is rotation-locked */ }
+  },
+
+  async exitDriveMode() {
+    try {
+      const o = screen.orientation;
+      if (o && o.unlock) o.unlock();
+    } catch { /* never locked */ }
+    try {
+      if (document.fullscreenElement && document.exitFullscreen) await document.exitFullscreen();
+    } catch { /* not fullscreen */ }
+  },
+};
+
 /* ---- drive-loop output bundle -------------------------------------------
  * The exact surface `useDriveLoop` needs from a host platform. The native
  * adapter exports an identically-shaped `driveIO`, which is what lets the

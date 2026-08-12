@@ -354,6 +354,67 @@ export function MapTile({ s, route }) {
   );
 }
 
+/* ---------- camera tiles ----------
+ * Both cameras run for the whole shift and neither one analyses anything: the
+ * models are not built. What these tiles show is the *evidence pipeline* —
+ * that the rear camera is capturing the corridor with chainage attached, and
+ * that the front camera has cut a clip when the DMS said something. A driver
+ * seeing "recording" is also the honest disclosure that the cab is filmed.
+ */
+export function RoadScanTile({ s }) {
+  const rec = s.recorders && s.recorders.rear;
+  if (!rec) {
+    return (
+      <>
+        <div className="tile-title">Road scan</div>
+        <div className="tile-body"><div className="tile-sub dim">Rear camera starts with the shift.</div></div>
+      </>
+    );
+  }
+  return (
+    <>
+      <div className="tile-title">
+        <span className={rec.recording ? 't-danger' : 'dim'}>●</span> Road scan · rear
+      </div>
+      <div className="tile-body">
+        <div className="tile-hero sm">{rec.clipCount}</div>
+        <div className="tile-sub">clips this shift · {(rec.queuedBytes / (1024 * 1024)).toFixed(0)} MB queued</div>
+        <div className="bar" style={{ marginTop: 7 }}>
+          <i style={{ width: Math.round((rec.segmentProgress || 0) * 100) + '%', background: '#ff6070' }} />
+        </div>
+        <div className="tile-note">segment {rec.camera.segmentSec}s · analysis pending</div>
+      </div>
+    </>
+  );
+}
+
+export function DriverCamTile({ s }) {
+  const rec = s.recorders && s.recorders.front;
+  if (!rec) {
+    return (
+      <>
+        <div className="tile-title">Driver camera</div>
+        <div className="tile-body"><div className="tile-sub dim">Front camera starts with the shift.</div></div>
+      </>
+    );
+  }
+  const last = rec.clips[rec.clips.length - 1];
+  return (
+    <>
+      <div className="tile-title">
+        <span className={rec.recording ? 't-danger' : 'dim'}>●</span> Driver camera
+      </div>
+      <div className="tile-body">
+        <div className="tile-hero sm">{rec.clipCount}</div>
+        <div className="tile-sub">
+          {rec.clipCount === 0 ? 'no fatigue events' : `last: ${last.reason}`}
+        </div>
+        <div className="tile-note">event clips only · never continuous</div>
+      </div>
+    </>
+  );
+}
+
 export const TILE_COMPONENTS = {
   'lane-policy': LanePolicyTile,
   'speed-gear': SpeedGearTile,
@@ -365,4 +426,6 @@ export const TILE_COMPONENTS = {
   traffic: TrafficTile,
   'compliance-checks': ComplianceChecksTile,
   map: MapTile,
+  'road-scan': RoadScanTile,
+  'driver-cam': DriverCamTile,
 };

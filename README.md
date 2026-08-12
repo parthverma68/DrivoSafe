@@ -37,9 +37,14 @@ most design weight:
 - **§12.5 Identity, roles and device binding** — role as a *scope* rather than a job title,
   `operatorId` tenancy applied where data is selected rather than where it is rendered, and the
   one-time bolt-in that makes the vehicle known before anyone signs in.
-- **§13.0 The pre-drive gate** — vehicle → face → breath, and the three rules that decide whether
-  a safety device gets used or routed around: a short blow is not an attempt, an over-long one is
-  truncated not rejected, and three failures lock the vehicle in a way the driver cannot clear.
+- **§13.0 The pre-drive gate** — vehicle → face → breath → assignment, and the rules that decide
+  whether a safety device gets used or routed around: the analyser is a separate device the screen
+  cannot fake, a rejected sample or a silent device costs no attempt, and three failures lock the
+  vehicle in a way the driver cannot clear.
+- **§11.2b Cameras** — what is captured, what is labelled, and the explicit admission that no
+  model consumes any of it yet.
+- **§12.6 Attendance and lockouts** — attendance as a by-product of the gate, and a lock that
+  leaves the cab because the people who can clear it are not in it.
 
 ---
 
@@ -57,7 +62,7 @@ is consumed byte-identically by both. The only forked layer is `src/platform/`.
 ```bash
 npm install          # workspace root: installs shared + app + native
 
-npm test             # 54 domain tests, plain Node, neither host installed
+npm test             # 84 domain tests, plain Node, neither host installed
 npm run web          # http://localhost:5173
 npm run web:build
 ```
@@ -115,10 +120,33 @@ prove they are the driver:
 2. **Identity** — a front-camera burst matched against the faces enrolled for that bus's
    operator. An unknown face opens **registration, not refusal**; a dark lens is a capture
    verdict, not an identity one.
-3. **Breath** — a 5–8 s blow at 0.01 %BAC fleet policy. A short blow does not cost an attempt;
-   **three failures lock the vehicle** and only a supervisor override clears it.
+3. **Breath** — the analyser is a **separate BLE device**, so the app has no gesture that produces
+   a reading. It shows *start analysis*, waits while the driver blows into the unit, and records
+   what the device reports. A sample the device rejects, or a device that never answers, is a
+   fault and costs no attempt. **Three failed readings lock the vehicle** — and the driver cannot
+   clear it: the event goes to the operator and to an administrator, either of whom can reset it
+   from the fleet console.
+4. **Bus & route** — which vehicle and which corridor this shift is running. Last, because there
+   is no point choosing a route for a driver who is not going to be allowed to drive.
 
-Tick *sensor sim · alcohol present* on the breath step to walk the lockout path.
+Tick *device sim · alcohol present* on the breath step to walk the lockout path, then sign in as
+the fleet owner to see the event land and clear it.
+
+### Attendance, and two cameras
+
+**Attendance is a by-product of that gate, not a separate register.** Every row was produced by a
+face match and a breath reading, which is considerably harder to sign on somebody else's behalf
+than a sheet at the depot gate. Punctuality, hours and turned-away counts live in the fleet
+console's Attendance tab; a driver who was refused still gets a row, because that is the most
+useful one to keep.
+
+**Both cameras run for the whole shift and neither analyses anything yet.** The rear camera
+captures the road surface in 30-second segments; the front camera cuts an 8-second-pre-roll clip
+whenever the DMS level worsens. The models — surface segmentation, the ocular pipeline — are not
+implemented, and the clips carry `analysis: 'pending-model'` to say so. What *is* built is the
+part that has to come first: capture, label with chainage and lane and light, bound the buffer,
+queue it for sync. A model can be pointed at a labelled queue later; it cannot be pointed at
+footage that was never kept. Recording is disclosed on the cab status bar whenever it is live.
 
 | Surface | What it is |
 |---|---|
@@ -130,6 +158,23 @@ Tick *sensor sim · alcohol present* on the breath step to walk the lockout path
 
 On a real bus the app launches straight into the check-in gate and then **Drive** under Android
 kiosk mode with no navigation at all (`KIOSK = true` in `native/src/App.jsx`).
+
+### On a phone
+
+Both builds are usable on a handset, and the drive screen is the part that needed real thought
+rather than a media query.
+
+- **Consoles re-stack rather than shrink.** The three-column operations board becomes one
+  scrolling column, the icon rail moves to the bottom within thumb reach, and wide data — the
+  corridor heatmap, the event tables — scrolls inside its own card instead of stretching the page.
+- **The drive screen gets a different grid** (§11.2 profiles), not a scaled-down one: the HUD plus
+  the three tiles a driver acts on — **speed & gear, next hazard, trip score**. Everything else is
+  gone, because nine tiles on a 6-inch screen is nine things nobody can read at 80 km/h. It is
+  fixed, so a phone never overwrites the dashboard the driver arranged on their tablet.
+- **Landscape is requested at the tap that starts the shift** — fullscreen, then an orientation
+  lock. Both are best-effort (iOS has no lock at all), so if the phone stays portrait the screen
+  says so, and the portrait profile still renders a usable dashboard: HUD across the top, the
+  three tiles in a row beneath it.
 
 ### Day and night
 
@@ -162,19 +207,23 @@ bus. On real hardware it is absent and the identical state arrives from `src/pla
 shared/src/
 ├── drowsiness.js    DMS fusion engine + deterministic driver simulator
 ├── alerts.js        priority arbiter, dedupe, silence budget
-├── layout.js        tile algebra: anchor invariants, swap, reflow, validate
+├── layout.js        tile algebra: anchor invariants, swap, reflow, validate,
+│                   and the tablet / phone grid profiles
 ├── telemetry.js     gear advisory + vehicle/OBD/IMU simulator
 ├── corridors.js     corridor catalogue → library Route model
 ├── fleet.js         operators, buses, drivers, partners, assignments, shifts
 ├── accounts.js      roles, accounts, device binding, face enrolments, tenancy
-├── checkin.js       the pre-drive gate: breath-test machine + face matcher
+├── checkin.js       the pre-drive gate: analyser protocol + face matcher
+├── attendance.js    shift records the gate produces, and their roll-ups
+├── lockouts.js      the event a failed breath test raises, and who may clear it
+├── recording.js     both cameras: segments, event clips, the pending-model queue
 ├── liveFleet.js     the live telemetry feed the consoles watch
 ├── useDriveLoop.js  the 10 Hz drive loop — platform injected, not imported
-└── *.test.js        54 behavioural tests
+└── *.test.js        84 behavioural tests
 
 app/src/  ·  native/src/
 ├── platform/        the seam — the only forked layer
-├── session.js       role session + the one-time install record
+├── session.js       role session, the one-time install record, the fleet log
 ├── components/      TileGrid, the ten info tiles, the fleet map, camera views
 └── screens/         welcome · login · check-in · the five surfaces
 ```

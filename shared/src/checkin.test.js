@@ -3,50 +3,58 @@
  * The rules under test are the ones a driver would try to route around, and
  * the ones a fleet would be sued over: what counts as an attempt, when the
  * vehicle locks, and who can unlock it.
+ *
+ * The analyser is a separate BLE device, so the app never produces a reading —
+ * it asks, waits, and records. These tests drive it the same way the hosts do:
+ * `startAnalysis()`, then `onDeviceResult()` with what the device said.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createBreathTest, createCheckinGate, verifyFace, makeCapture, failingCell,
-  ALCOHOL_POLICY, FACE_POLICY,
+  createBreathTest, createCheckinGate, verifyFace, makeCapture,
+  ALCOHOL_POLICY, FACE_POLICY, CHECKIN_STEPS,
 } from './checkin.js';
 
 const P = ALCOHOL_POLICY;
+const sample = (bac, extra = {}) => ({ bac, durationMs: 6200, valid: true, ...extra });
 
-/* Drive a test from cold to `ready`. */
-function armed(opts) {
+/** Drive a test from cold to `ready`. */
+function paired(opts) {
   const bt = createBreathTest(opts);
-  bt.warmup(0);
-  bt.tick(P.warmupMs);
+  bt.pair(0);
+  bt.tick(P.pairingMs);
   return bt;
 }
 
-test('the cell must warm up before a blow is accepted', () => {
+test('the analyser must be paired before an analysis can start', () => {
   const bt = createBreathTest();
   assert.equal(bt.state().state, 'idle');
-  bt.startBlow(0);
-  assert.equal(bt.state().state, 'idle', 'blowing from idle is ignored');
+  bt.startAnalysis(0);
+  assert.equal(bt.state().state, 'idle', 'starting from idle is ignored');
 
-  bt.warmup(0);
-  assert.equal(bt.tick(P.warmupMs - 1).state, 'warmup');
-  assert.equal(bt.tick(P.warmupMs).state, 'ready');
+  bt.pair(0);
+  assert.equal(bt.tick(P.pairingMs - 1).state, 'pairing');
+  const ready = bt.tick(P.pairingMs);
+  assert.equal(ready.state, 'ready');
+  assert.ok(ready.device, 'the paired device is reported so the screen can name it');
 });
 
-test('a blow shorter than the minimum is not an attempt', () => {
-  const bt = armed();
-  bt.startBlow(0);
-  const s = bt.endBlow(P.minBlowMs - 500);
+test('the app cannot produce a reading on its own — it waits for the device', () => {
+  const bt = paired();
+  const s = bt.startAnalysis(0);
+  assert.equal(s.state, 'analysing');
+  assert.equal(s.attempts, 0, 'asking is not an attempt');
+  assert.equal(s.result, null);
 
-  assert.equal(s.attempts, 0, 'a short blow must not burn an attempt');
-  assert.equal(s.state, 'ready', 'and must leave the driver able to blow again');
-  assert.equal(s.result.valid, false);
-  assert.equal(s.result.reason, 'short-blow');
+  /* Twenty seconds of waiting change nothing without the device. */
+  assert.equal(bt.tick(20000).state, 'analysing');
+  assert.equal(bt.state().attempts, 0);
 });
 
-test('a clean blow of the required length passes', () => {
-  const bt = armed();
-  bt.startBlow(0);
-  const s = bt.endBlow(P.minBlowMs + 400);
+test('a clear reading from the device passes', () => {
+  const bt = paired();
+  bt.startAnalysis(0);
+  const s = bt.onDeviceResult(sample(0), 4200);
 
   assert.equal(s.state, 'pass');
   assert.equal(s.passed, true);
@@ -55,91 +63,108 @@ test('a clean blow of the required length passes', () => {
   assert.ok(s.result.bac <= P.limitBac);
 });
 
-test('a blow past the ceiling is truncated, not rejected', () => {
-  const bt = armed();
-  bt.startBlow(0);
-  const s = bt.endBlow(P.maxBlowMs + 5000);
+test('a reading over the policy limit fails and is logged with the statutory flag', () => {
+  const bt = paired();
+  bt.startAnalysis(0);
+  const s = bt.onDeviceResult(sample(0.058), 4200);
 
-  assert.equal(s.result.valid, true);
-  assert.equal(s.result.durationMs, P.maxBlowMs, 'the saturated tail is discarded');
+  assert.equal(s.state, 'fail');
+  assert.equal(s.result.pass, false);
+  assert.equal(s.result.overLegal, true, '0.058 is above the 0.03 statutory limit');
+  assert.equal(s.attemptsLeft, P.maxAttempts - 1);
 });
 
-test('tick auto-ends a blow held past the ceiling', () => {
-  const bt = armed();
-  bt.startBlow(0);
-  const s = bt.tick(P.maxBlowMs + 1);
-  assert.equal(s.state, 'pass');
-  assert.equal(s.result.durationMs, P.maxBlowMs);
+test('a sample the device rejects is a fault, not an attempt', () => {
+  const bt = paired();
+  bt.startAnalysis(0);
+  const s = bt.onDeviceResult({ valid: false, reason: 'short-sample', durationMs: 1200 }, 3000);
+
+  assert.equal(s.state, 'fault');
+  assert.equal(s.attempts, 0, 'a bad blow must not burn an attempt');
+  assert.equal(s.result.valid, false);
+
+  /* And the driver can go straight round again. */
+  assert.equal(bt.retry(3500).state, 'ready');
 });
 
-test('three failures lock the vehicle, and a fourth blow is refused', () => {
-  const bt = armed({ readCell: failingCell(9) });
+test('a device that never answers is a device fault, not a driver failure', () => {
+  const bt = paired();
+  bt.startAnalysis(0);
+  assert.equal(bt.tick(P.analysisTimeoutMs - 1).state, 'analysing');
+
+  const s = bt.tick(P.analysisTimeoutMs);
+  assert.equal(s.state, 'fault');
+  assert.equal(s.result.reason, 'device-timeout');
+  assert.equal(s.attempts, 0);
+});
+
+test('a late reading after a timeout is ignored', () => {
+  const bt = paired();
+  bt.startAnalysis(0);
+  bt.tick(P.analysisTimeoutMs);
+  const s = bt.onDeviceResult(sample(0.09), P.analysisTimeoutMs + 500);
+  assert.equal(s.attempts, 0, 'the session was already closed as a fault');
+  assert.equal(s.state, 'fault');
+});
+
+test('three failed readings lock the vehicle, and a fourth is refused', () => {
+  const bt = paired();
 
   for (let i = 1; i <= 2; i++) {
-    bt.startBlow(0);
-    const s = bt.endBlow(P.minBlowMs);
+    bt.startAnalysis(0);
+    const s = bt.onDeviceResult(sample(0.06), 4000);
     assert.equal(s.state, 'fail', `attempt ${i} fails but leaves a retry`);
     assert.equal(s.attemptsLeft, P.maxAttempts - i);
     bt.retry(0);
-    bt.tick(P.warmupMs);
   }
 
-  bt.startBlow(0);
-  const s = bt.endBlow(P.minBlowMs);
+  bt.startAnalysis(0);
+  const s = bt.onDeviceResult(sample(0.06), 4000);
   assert.equal(s.state, 'locked');
   assert.equal(s.locked, true);
   assert.equal(s.attemptsLeft, 0);
 
   /* The driver cannot blow their way out of a lock. */
   assert.equal(bt.retry(0).state, 'locked');
-  bt.startBlow(0);
-  assert.equal(bt.endBlow(P.minBlowMs).attempts, 3, 'no further attempts are recorded');
+  bt.startAnalysis(0);
+  assert.equal(bt.onDeviceResult(sample(0), 0).attempts, 3, 'no further attempts are recorded');
 });
 
-test('short blows do not count toward the lock', () => {
-  const bt = armed({ readCell: failingCell(9) });
+test('rejected samples never accumulate toward the lock', () => {
+  const bt = paired();
   for (let i = 0; i < 6; i++) {
-    bt.startBlow(0);
-    bt.endBlow(1000);
+    bt.startAnalysis(0);
+    bt.onDeviceResult({ valid: false, durationMs: 900 }, 1000);
+    bt.retry(1000);
   }
   assert.equal(bt.state().state, 'ready');
   assert.equal(bt.state().attempts, 0);
 });
 
-test('only a supervisor override clears a lock, and it is recorded', () => {
-  const bt = armed({ readCell: failingCell(3) });
+test('only an override clears a lock, and it is recorded', () => {
+  const bt = paired();
   for (let i = 0; i < 3; i++) {
-    bt.startBlow(0);
-    bt.endBlow(P.minBlowMs);
+    bt.startAnalysis(0);
+    bt.onDeviceResult(sample(0.07), 4000);
     bt.retry(0);
-    bt.tick(P.warmupMs);
   }
   assert.equal(bt.state().state, 'locked');
 
-  const s = bt.unlock('depot-supervisor:anita');
+  const s = bt.unlock('operator:sarthi');
   assert.equal(s.state, 'ready');
   assert.equal(s.attempts, 0);
-  assert.ok(s.history.some((h) => h.override && h.by === 'depot-supervisor:anita'));
+  assert.ok(s.history.some((h) => h.override && h.by === 'operator:sarthi'));
 });
 
-test('a failing driver who then blows clean is let through', () => {
-  const bt = armed({ readCell: failingCell(1) });
-  bt.startBlow(0);
-  assert.equal(bt.endBlow(P.minBlowMs).state, 'fail');
+test('a driver who fails once and then reads clear is let through', () => {
+  const bt = paired();
+  bt.startAnalysis(0);
+  assert.equal(bt.onDeviceResult(sample(0.04), 4000).state, 'fail');
   bt.retry(0);
-  bt.tick(P.warmupMs);
-  bt.startBlow(0);
-  const s = bt.endBlow(P.minBlowMs);
+  bt.startAnalysis(0);
+  const s = bt.onDeviceResult(sample(0), 8000);
   assert.equal(s.state, 'pass');
   assert.equal(s.history.length, 2, 'both readings stay in the record');
-});
-
-test('blow progress reports against the minimum duration', () => {
-  const bt = armed();
-  bt.startBlow(0);
-  assert.equal(bt.blowProgress(0), 0);
-  assert.equal(bt.blowProgress(P.minBlowMs / 2), 0.5);
-  assert.equal(bt.blowProgress(P.minBlowMs * 2), 1, 'progress is clamped');
 });
 
 /* ------------------------------------------------------------- face ------ */
@@ -182,8 +207,9 @@ test('verification against an empty roster cannot match', () => {
 
 /* ------------------------------------------------------------- gate ------ */
 
-test('the gate advances only in order and clears on a passed breath test', () => {
+test('the gate advances only in order, and a pass leads to assignment, not to driving', () => {
   const g = createCheckinGate();
+  assert.deepEqual(CHECKIN_STEPS, ['vehicle', 'identity', 'alcohol', 'assignment', 'cleared']);
   assert.equal(g.state().step, 'vehicle');
 
   g.confirmVehicle({ device: { serial: 'DS-TAB-8841' }, bus: { id: 'bus-1' } });
@@ -193,11 +219,26 @@ test('the gate advances only in order and clears on a passed breath test', () =>
   assert.equal(g.state().step, 'alcohol');
 
   g.applyBreath({ passed: false, locked: false });
-  assert.equal(g.state().step, 'alcohol', 'a failed test does not clear the gate');
+  assert.equal(g.state().step, 'alcohol', 'a failed test does not advance the gate');
 
   g.applyBreath({ passed: true, locked: false });
-  assert.equal(g.state().step, 'cleared');
-  assert.equal(g.state().cleared, true);
+  assert.equal(g.state().step, 'assignment', 'a clear reading buys the bus-and-route choice');
+  assert.equal(g.state().cleared, false, 'and not the road');
+
+  const s = g.confirmAssignment({ busId: 'bus-1', routeId: 'nh52-indore-dewas' });
+  assert.equal(s.step, 'cleared');
+  assert.equal(s.cleared, true);
+  assert.deepEqual(s.assignment, { busId: 'bus-1', routeId: 'nh52-indore-dewas' });
+});
+
+test('a second breath snapshot cannot drag the gate back out of assignment', () => {
+  const g = createCheckinGate();
+  g.confirmVehicle({});
+  g.confirmDriver({});
+  g.applyBreath({ passed: true });
+  assert.equal(g.state().step, 'assignment');
+  g.applyBreath({ passed: true });
+  assert.equal(g.state().step, 'assignment', 'the poll that produced it keeps firing');
 });
 
 test('a locked breath test surfaces on the gate', () => {

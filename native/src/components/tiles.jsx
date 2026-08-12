@@ -345,6 +345,63 @@ export function MapTile({ s, route }) {
   );
 }
 
+/* ---------- camera tiles ----------
+ * Neither camera analyses anything: the models are not built. What these show
+ * is the evidence pipeline — the rear camera capturing the corridor with
+ * chainage attached, and the front one having cut a clip when the DMS spoke. */
+export function RoadScanTile({ s }) {
+  const rec = s.recorders && s.recorders.rear;
+  if (!rec) {
+    return (
+      <>
+        <Text style={S.tileTitle}>Road scan</Text>
+        <View style={S.tileBody}><Text style={S.tileSub}>Rear camera starts with the shift.</Text></View>
+      </>
+    );
+  }
+  return (
+    <>
+      <Text style={S.tileTitle}>● Road scan · rear</Text>
+      <View style={S.tileBody}>
+        <Text style={S.tileHeroSm}>{rec.clipCount}</Text>
+        <Text style={S.tileSub}>
+          clips · {(rec.queuedBytes / (1024 * 1024)).toFixed(0)} MB queued
+        </Text>
+        <View style={[S.bar, { marginTop: 7 }]}>
+          <View style={{
+            width: Math.round((rec.segmentProgress || 0) * 100) + '%',
+            height: '100%', backgroundColor: C.danger,
+          }} />
+        </View>
+        <Text style={S.tileNote}>segment {rec.camera.segmentSec}s · analysis pending</Text>
+      </View>
+    </>
+  );
+}
+
+export function DriverCamTile({ s }) {
+  const rec = s.recorders && s.recorders.front;
+  if (!rec) {
+    return (
+      <>
+        <Text style={S.tileTitle}>Driver camera</Text>
+        <View style={S.tileBody}><Text style={S.tileSub}>Front camera starts with the shift.</Text></View>
+      </>
+    );
+  }
+  const last = rec.clips[rec.clips.length - 1];
+  return (
+    <>
+      <Text style={S.tileTitle}>● Driver camera</Text>
+      <View style={S.tileBody}>
+        <Text style={S.tileHeroSm}>{rec.clipCount}</Text>
+        <Text style={S.tileSub}>{rec.clipCount === 0 ? 'no fatigue events' : `last: ${last.reason}`}</Text>
+        <Text style={S.tileNote}>event clips only · never continuous</Text>
+      </View>
+    </>
+  );
+}
+
 export const TILE_COMPONENTS = {
   'lane-policy': LanePolicyTile,
   'speed-gear': SpeedGearTile,
@@ -356,4 +413,6 @@ export const TILE_COMPONENTS = {
   traffic: TrafficTile,
   'compliance-checks': ComplianceChecksTile,
   map: MapTile,
+  'road-scan': RoadScanTile,
+  'driver-cam': DriverCamTile,
 };

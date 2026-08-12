@@ -9,13 +9,15 @@
  * On a real unit it is absent and the same state arrives from src/platform.
  */
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, ScrollView } from 'react-native';
+import { View, Text, ScrollView, useWindowDimensions } from 'react-native';
 import { RoadHazardView, HIGH_QUALITY, ULTRA_QUALITY, EXTREME_QUALITY } from 'react-road-hazards';
 import {
   CORRIDOR_DEFS, getRoute, ACTIVE_SHIFT, BUSES, DRIVERS, byId,
-  DEFAULT_LAYOUT, validate, LEVEL_META, useDriveLoop,
+  DEFAULT_LAYOUT, profileFor, layoutForProfile, isCompact, validate, LEVEL_META, useDriveLoop,
+  createShiftRecorders,
 } from '@drivosafe/shared';
 import { storage, driveIO } from '../platform/index.js';
+import * as cam from '../platform/camera.js';
 import { C, S, MONO, TONE_COLOR, alertStyle } from '../theme.js';
 import { Chip, Btn, Slider, Cycler } from '../components/ui.jsx';
 import TileGrid from '../components/TileGrid.jsx';
@@ -56,11 +58,22 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
   const bus = byId(BUSES, shift.busId);
   const driver = byId(DRIVERS, shift.driverId);
 
-  const [layout, setLayoutState] = useState(() =>
+  /* The tablet is a landscape appliance, but the same binary runs on a phone —
+   * a supervisor's handset, or a small in-cab unit. A phone gets the reduced
+   * grid from §11.2 profiles (HUD + speed & gear, next hazard, trip score)
+   * rather than nine unreadable tiles, and that grid is fixed, so a saved
+   * tablet dashboard is neither loaded nor overwritten. */
+  const { width, height } = useWindowDimensions();
+  const profile = profileFor(width, height);
+  const compact = isCompact(profile);
+
+  const [savedLayout, setSavedLayout] = useState(() =>
     validate(storage.get('layout:' + shift.driverId, DEFAULT_LAYOUT))
   );
+  const layout = compact ? layoutForProfile(profile) : savedLayout;
   const setLayout = (l) => {
-    setLayoutState(l);
+    if (compact) return;
+    setSavedLayout(l);
     storage.set('layout:' + shift.driverId, l);
   };
 
@@ -72,10 +85,47 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
   /* §11.2 safety rule: the grid is read-only in motion. The edit affordance is
    * not merely disabled — while moving it is gone, and any open edit session is
    * force-committed the moment the bus rolls. */
+  /* ---- the two cameras ----------------------------------------------------
+   * Both start with the shift and stop with it: the rear one captures the road
+   * surface continuously with chainage attached, the front one cuts a clip when
+   * the DMS worsens. Nothing is analysed on device — the models are not built
+   * (see shared/src/recording.js). A mirror does not record: a console watching
+   * this cab is not a second camera in it. */
+  const recordersRef = useRef(null);
+  if (!recordersRef.current) recordersRef.current = createShiftRecorders();
+  const [recorders, setRecorders] = useState(() => recordersRef.current.state());
+
+  useEffect(() => {
+    if (mirror) return undefined;
+    const rec = recordersRef.current;
+    rec.start(Date.now());
+    return () => rec.stop(Date.now());
+  }, [mirror]);
+
+  useEffect(() => {
+    if (mirror) return undefined;
+    const id = setInterval(() => {
+      recordersRef.current.tick(Date.now(), {
+        chainageM: state.progress,
+        lane: state.lane,
+        speedKph: state.speed,
+        dmsLevel: state.drowsiness.level,
+        routeId,
+        busId: shift.busId,
+        driverId: shift.driverId,
+      });
+      setRecorders(recordersRef.current.state());
+    }, 1000);
+    return () => clearInterval(id);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [mirror, routeId, shift.busId, shift.driverId]);
+
+  const tileState = useMemo(() => ({ ...state, recorders }), [state, recorders]);
+
   const stationary = state.speed < 1;
   useEffect(() => {
-    if (!stationary && editing) setEditing(false);
-  }, [stationary, editing]);
+    if ((!stationary || compact) && editing) setEditing(false);
+  }, [stationary, editing, compact]);
 
   const dms = state.drowsiness;
   const critical = dms.level === 'D4';
@@ -109,7 +159,10 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
 
   return (
     <View style={{ flex: 1, padding: 8, gap: 8 }}>
+      {mirror ? null : <RearCamera active={recorders.rear.recording} />}
+
       <StatusBar
+        recorders={mirror ? null : recorders}
         corridor={corridor}
         route={route}
         state={state}
@@ -123,8 +176,9 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
       <TileGrid
         layout={layout}
         setLayout={setLayout}
+        profile={profile}
         editing={editing}
-        state={state}
+        state={tileState}
         route={route}
         onBreak={actions.takeBreak}
         hud={hud}
@@ -135,7 +189,7 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
           {...{
             routeId, setRouteId, running, setRunning, timeScale, setTimeScale,
             fatigueDial, setFatigueDial, compliant, setCompliant, quality, setQuality,
-            localHour, setLocalHour, editing, setEditing, stationary, state,
+            localHour, setLocalHour, editing, setEditing, stationary, state, compact,
           }}
         />
       )}
@@ -188,8 +242,55 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
   );
 }
 
+/* ---------- rear camera ----------
+ * The road-facing capture surface. VisionCamera needs a mounted <Camera> to
+ * record, and the driver must not have a second video window competing with the
+ * HUD for attention — so it is mounted at the edge of the screen, one pixel
+ * wide and transparent. The *disclosure* is not hidden: the status bar carries
+ * a REC chip whenever this is live, and the road-scan tile shows the clip count.
+ *
+ * Segment boundaries come from shared/src/recording.js, so the tablet and the
+ * browser build agree on clip length, buffering and eviction; this file only
+ * starts and stops the hardware.
+ */
+function RearCamera({ active }) {
+  const ref = useRef(null);
+  const device = cam.useCameraDevice('back');
+  const [permission, setPermission] = useState('unavailable');
+  const recorderRef = useRef(null);
+
+  useEffect(() => {
+    let alive = true;
+    if (!cam.available()) return undefined;
+    cam.requestPermission().then((p) => { if (alive) setPermission(p); });
+    return () => { alive = false; };
+  }, []);
+
+  const status = cam.cameraStatus(device, permission);
+
+  useEffect(() => {
+    if (!status.ok) return undefined;
+    if (!recorderRef.current) recorderRef.current = cam.createVideoRecorder(ref, {});
+    if (active) recorderRef.current.start();
+    return () => { if (recorderRef.current) recorderRef.current.stop(); };
+  }, [status.ok, active]);
+
+  if (!status.ok || !cam.Camera) return null;
+  /* Parked off-screen rather than collapsed to a pixel: Android needs a real
+   * surface of a sane size to attach a capture session to, and a 1x1 preview is
+   * a reliable way to get a camera that reports ready and records nothing. */
+  return (
+    <View
+      style={{ position: 'absolute', left: -200, top: 0, width: 160, height: 120, opacity: 0 }}
+      pointerEvents="none"
+    >
+      <cam.Camera ref={ref} device={device} isActive={active} video style={{ flex: 1 }} />
+    </View>
+  );
+}
+
 /* ---------- status bar ---------- */
-function StatusBar({ corridor, route, state, bus, driver, stationary }) {
+function StatusBar({ corridor, route, state, bus, driver, stationary, recorders }) {
   const dms = state.drowsiness;
   const meta = LEVEL_META[dms.level] || LEVEL_META.D0;
   const stale = corridor && !/today/.test(corridor.freshness || '');
@@ -215,6 +316,15 @@ function StatusBar({ corridor, route, state, bus, driver, stationary }) {
         </Chip>
         <Chip tone={levelTone}>{dms.level} {meta.label}</Chip>
         <Chip>{stationary ? 'STATIONARY' : 'IN MOTION'}</Chip>
+        {/* Both cameras are disclosed on the status bar, always. A cab that
+            films the driver and does not say so is the version of this product
+            nobody should ship. */}
+        {recorders ? (
+          <>
+            <Chip tone="danger">REC ROAD {recorders.rear.clipCount}</Chip>
+            <Chip tone="warn">DMS CLIPS {recorders.front.clipCount}</Chip>
+          </>
+        ) : null}
         <Chip>SYNC QUEUED</Chip>
       </View>
     </ScrollView>
@@ -281,9 +391,12 @@ function SimStrip(p) {
 
           <Cycler options={Object.keys(QUALITY)} value={p.quality} onChange={p.setQuality} />
 
-          <Btn onPress={() => p.setEditing(!p.editing)} disabled={!p.stationary}>
-            {p.editing ? 'DONE' : 'EDIT LAYOUT'}
-          </Btn>
+          {/* the compact grid is fixed, so there is nothing to edit */}
+          {p.compact ? null : (
+            <Btn onPress={() => p.setEditing(!p.editing)} disabled={!p.stationary}>
+              {p.editing ? 'DONE' : 'EDIT LAYOUT'}
+            </Btn>
+          )}
 
           <Text style={{ fontFamily: MONO, fontSize: 9, color: C.fg3 }}>
             alerts 5min {p.state.alertStats.spokenLast5min}/30 · dropped {p.state.alertStats.dropped}

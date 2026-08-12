@@ -276,9 +276,15 @@ function RearCamera({ active }) {
   }, [status.ok, active]);
 
   if (!status.ok || !cam.Camera) return null;
+  /* Parked off-screen rather than collapsed to a pixel: Android needs a real
+   * surface of a sane size to attach a capture session to, and a 1x1 preview is
+   * a reliable way to get a camera that reports ready and records nothing. */
   return (
-    <View style={{ position: 'absolute', width: 1, height: 1, opacity: 0 }} pointerEvents="none">
-      <cam.Camera ref={ref} device={device} isActive={active} video style={{ width: 1, height: 1 }} />
+    <View
+      style={{ position: 'absolute', left: -200, top: 0, width: 160, height: 120, opacity: 0 }}
+      pointerEvents="none"
+    >
+      <cam.Camera ref={ref} device={device} isActive={active} video style={{ flex: 1 }} />
     </View>
   );
 }

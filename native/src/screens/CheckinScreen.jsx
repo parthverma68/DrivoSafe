@@ -7,7 +7,7 @@
  * machine out of the view layer.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, ScrollView, TextInput, TouchableOpacity, Animated } from 'react-native';
+import { View, Text, ScrollView, TextInput, TouchableOpacity, Animated, AppState } from 'react-native';
 import Svg, { Circle, G } from 'react-native-svg';
 import {
   BUSES, DRIVERS, OPERATORS, ENROLMENTS, DEVICES, CORRIDOR_DEFS, byId, forOperator,
@@ -289,11 +289,24 @@ function IdentityStep({ account, bus, operator, onConfirm, onBack }) {
   const cameraRef = useRef(null);
   const device = cam.useCameraDevice('front');
   const [permission, setPermission] = useState('pending');
+  const [showDiag, setShowDiag] = useState(false);
+
   const askPermission = React.useCallback(() => {
     if (!cam.available()) { setPermission('unavailable'); return; }
     cam.requestPermission().then(setPermission);
   }, []);
   useEffect(() => { askPermission(); }, [askPermission]);
+
+  /* Someone who grants the permission in system settings comes back to a screen
+   * that has already made up its mind. Re-check on foreground so that journey
+   * ends with a working camera rather than a stale refusal. */
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') askPermission();
+    });
+    return () => sub.remove();
+  }, [askPermission]);
+
   const status = cam.cameraStatus(device, permission);
 
   const candidates = useMemo(() => {
@@ -370,9 +383,36 @@ function IdentityStep({ account, bus, operator, onConfirm, onBack }) {
               backgroundColor: C.amberSoft, borderWidth: 1, borderColor: C.amber,
             }}>
               <Text style={{ color: C.amber, fontSize: 11.5, lineHeight: 17 }}>{status.hint}</Text>
-              {status.fixable ? (
-                <View style={{ marginTop: 10, alignItems: 'flex-start' }}>
-                  <Btn onPress={askPermission}>Grant camera access</Btn>
+              <View style={[S.row, { marginTop: 10, gap: 8 }]}>
+                {status.fixable ? <Btn onPress={askPermission}>Grant camera access</Btn> : null}
+                <Btn kind="ghost" onPress={() => setShowDiag(!showDiag)}>
+                  {showDiag ? 'Hide details' : 'Why?'}
+                </Btn>
+              </View>
+
+              {/* A release build has no dev console, so the state that explains
+                  this has to be readable on the device itself. */}
+              {showDiag ? (
+                <View style={{
+                  marginTop: 10, padding: 10, borderRadius: 10,
+                  backgroundColor: C.bg1, borderWidth: 1, borderColor: C.line2,
+                }}>
+                  {Object.entries(cam.diagnostics()).map(([k, v]) => (
+                    <View key={k} style={S.statLine}>
+                      <Text style={S.statK}>{k}</Text>
+                      <Text style={[S.statV, { flexShrink: 1, textAlign: 'right' }]} numberOfLines={3}>
+                        {v === null ? '—' : String(v)}
+                      </Text>
+                    </View>
+                  ))}
+                  <View style={S.statLine}>
+                    <Text style={S.statK}>permission</Text>
+                    <Text style={S.statV}>{permission}</Text>
+                  </View>
+                  <View style={S.statLine}>
+                    <Text style={S.statK}>front device</Text>
+                    <Text style={S.statV}>{device ? (device.id || 'found') : 'none'}</Text>
+                  </View>
                 </View>
               ) : null}
             </View>

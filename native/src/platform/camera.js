@@ -20,7 +20,7 @@
  *    — every screen already renders a synthetic feed when there is no camera,
  *    because a missing camera is a reported condition, not a crash.
  */
-import { Platform, PermissionsAndroid } from 'react-native';
+import { Platform, PermissionsAndroid, NativeModules } from 'react-native';
 
 let VisionCamera = null;
 let moduleError = null;
@@ -53,6 +53,23 @@ try {
 /** Why the native module is unavailable, if it is. Null when it loaded. */
 export const moduleFailure = () => moduleError;
 
+/**
+ * Everything needed to answer "why is there no camera" from the device itself.
+ *
+ * A release build has no `__DEV__` console and usually no attached debugger, so
+ * a warning that only fires in development is a warning nobody on a real phone
+ * will ever read. This is rendered on screen instead.
+ */
+export function diagnostics() {
+  return {
+    platform: `${Platform.OS} ${Platform.Version}`,
+    jsBundled: true,                                   // this file imported at all
+    nativeModule: !!NativeModules.CameraView,          // the autolinked native side
+    libraryLoaded: !!VisionCamera,
+    error: moduleError,
+  };
+}
+
 export const Camera = VisionCamera ? VisionCamera.Camera : null;
 export const useCameraDevice = VisionCamera ? VisionCamera.useCameraDevice : () => null;
 export const useCameraPermission = VisionCamera ? VisionCamera.useCameraPermission : null;
@@ -71,9 +88,22 @@ export async function requestPermission() {
   if (!VisionCamera) return 'unavailable';
   try {
     if (Platform.OS === 'android') {
-      const res = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CAMERA);
-      if (res !== PermissionsAndroid.RESULTS.GRANTED) return 'denied';
+      /* Ask what we already have before prompting. Several Android skins —
+       * Vivo's Funtouch and Xiaomi's MIUI among them — apply their own
+       * permission policy on top of the platform's, and a grant made in system
+       * settings is invisible unless it is re-read. Prompting blind also burns
+       * the one "don't ask again" a user gets. */
+      const already = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.CAMERA);
+      if (!already) {
+        const res = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CAMERA);
+        if (res !== PermissionsAndroid.RESULTS.GRANTED) {
+          return res === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN ? 'blocked' : 'denied';
+        }
+      }
+      return 'granted';
     }
+    const current = VisionCamera.Camera.getCameraPermissionStatus();
+    if (current === 'granted') return 'granted';
     const status = await VisionCamera.Camera.requestCameraPermission();
     return status === 'granted' ? 'granted' : 'denied';
   } catch {
@@ -193,6 +223,16 @@ export function cameraStatus(device, permission) {
       fixable: false,
     };
   }
+  if (permission === 'blocked') {
+    return {
+      ok: false,
+      reason: 'blocked',
+      label: 'PERMISSION BLOCKED',
+      hint: 'Camera access was permanently denied, so the app can no longer ask. Grant it in '
+        + 'Settings → Apps → DrivoSafe → Permissions → Camera, then reopen this step.',
+      fixable: false,
+    };
+  }
   if (permission === 'denied') {
     return {
       ok: false,
@@ -204,7 +244,17 @@ export function cameraStatus(device, permission) {
     };
   }
   if (permission !== 'granted') {
-    return { ok: false, reason: 'pending', label: 'REQUESTING ACCESS', hint: null, fixable: false };
+    /* Not silent: a permission dialog that never resolves — which some Android
+     * skins produce when the app is backgrounded mid-prompt — would otherwise
+     * look identical to a camera that is merely slow to start. */
+    return {
+      ok: false,
+      reason: 'pending',
+      label: 'REQUESTING ACCESS',
+      hint: 'Waiting for the camera permission dialog. If no dialog appeared, grant camera '
+        + 'access in Settings → Apps → DrivoSafe → Permissions.',
+      fixable: true,
+    };
   }
   if (!device) {
     return {

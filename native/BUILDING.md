@@ -165,3 +165,32 @@ consent.
 Minimum versions are already satisfied by this project (`minSdkVersion 24`, `compileSdkVersion 36`,
 Kotlin 2.1.20). If Gradle complains about the Kotlin version after an upgrade, it is
 VisionCamera's `kotlinVersion` extension it is reading — set it in `android/build.gradle`.
+
+### "NATIVE MODULE MISSING" on a build that succeeded
+
+This is the failure worth knowing about, because **every step reports success**. Autolinking
+generates `PackageList.java` into `android/app/build/generated/autolinking/`, and Gradle will
+consider that task up to date against a build directory created *before* a dependency was added.
+Metro still bundles the library's JavaScript, the APK still builds and installs, and the native
+half is simply absent — so the app runs and falls back to its synthetic feed.
+
+Adding a dependency therefore needs a clean Android build, not an incremental one:
+
+```bash
+npm install                      # at the repo root
+cd native/android && ./gradlew clean && cd ..
+npx react-native build-android --mode=release
+```
+
+Then check the artefact before installing it — the only check that answers what the phone sees:
+
+```bash
+npm run verify:native --workspace drivosafe-native
+# or against a specific file:
+node scripts/verify-native-modules.mjs path/to/app-release.apk
+```
+
+It walks the three places the truth can diverge — is the package installed, does autolinking
+report it, and are its classes actually in the APK's dex — and exits non-zero if the last one
+fails. On the device itself, the check-in screen's **Why?** control shows the same state
+(`nativeModule`, `libraryLoaded`, the verbatim load error, the permission value).

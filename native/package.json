@@ -2,12 +2,13 @@
   "name": "drivosafe-native",
   "version": "1.0.0",
   "private": true,
-  "description": "DrivoSafe in-cab tablet app — bare React Native, Skia HUD. Android is the supported target (SYSTEM_DESIGN §4.1).",
+  "description": "DrivoSafe in-cab tablet app \u2014 bare React Native, Skia HUD. Android is the supported target (SYSTEM_DESIGN \u00a74.1).",
   "scripts": {
     "start": "react-native start",
     "android": "react-native run-android",
     "ios": "react-native run-ios",
-    "bundle": "react-native bundle --platform android --dev false --entry-file index.js --bundle-output build/index.android.bundle --assets-dest build"
+    "bundle": "react-native bundle --platform android --dev false --entry-file index.js --bundle-output build/index.android.bundle --assets-dest build",
+    "verify:native": "node scripts/verify-native-modules.mjs"
   },
   "dependencies": {
     "@drivosafe/shared": "*",

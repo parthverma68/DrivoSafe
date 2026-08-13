@@ -8,7 +8,7 @@
  * The sensor-sim strip stands in for the GNSS / OBD / IMU / driver-camera bus.
  * On a real unit it is absent and the same state arrives from src/platform.
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, ScrollView, useWindowDimensions } from 'react-native';
 import { RoadHazardView, HIGH_QUALITY, ULTRA_QUALITY, EXTREME_QUALITY } from 'react-road-hazards';
 import {
@@ -82,9 +82,6 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
     platform: driveIO,
   });
 
-  /* §11.2 safety rule: the grid is read-only in motion. The edit affordance is
-   * not merely disabled — while moving it is gone, and any open edit session is
-   * force-committed the moment the bus rolls. */
   /* ---- the two cameras ----------------------------------------------------
    * Both start with the shift and stop with it: the rear one captures the road
    * surface continuously with chainage attached, the front one cuts a clip when
@@ -102,14 +99,24 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
     return () => rec.stop(Date.now());
   }, [mirror]);
 
+  /* The 1 Hz sampler must read the *current* drive state, not the state that
+   * existed when the interval was created — a clip labelled with the chainage
+   * the bus had at shift start is worse than an unlabelled one, because it
+   * looks correct. A ref is the cheap way to keep one interval and still see
+   * fresh values. */
+  const driveStateRef = useRef(null);
+  driveStateRef.current = state;
+
   useEffect(() => {
     if (mirror) return undefined;
     const id = setInterval(() => {
+      const s = driveStateRef.current;
+      if (!s) return;
       recordersRef.current.tick(Date.now(), {
-        chainageM: state.progress,
-        lane: state.lane,
-        speedKph: state.speed,
-        dmsLevel: state.drowsiness.level,
+        chainageM: s.progress,
+        lane: s.lane,
+        speedKph: s.speed,
+        dmsLevel: s.drowsiness.level,
         routeId,
         busId: shift.busId,
         driverId: shift.driverId,
@@ -117,11 +124,13 @@ export default function DriveScreen({ shift = ACTIVE_SHIFT, mirror = false, reco
       setRecorders(recordersRef.current.state());
     }, 1000);
     return () => clearInterval(id);
-    /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, [mirror, routeId, shift.busId, shift.driverId]);
 
   const tileState = useMemo(() => ({ ...state, recorders }), [state, recorders]);
 
+  /* §11.2 safety rule: the grid is read-only in motion. The edit affordance is
+   * not merely disabled — while moving it is gone, and any open edit session is
+   * force-committed the moment the bus rolls. */
   const stationary = state.speed < 1;
   useEffect(() => {
     if ((!stationary || compact) && editing) setEditing(false);

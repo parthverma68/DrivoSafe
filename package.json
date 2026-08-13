@@ -2,7 +2,7 @@
   "name": "drivosafe",
   "version": "1.0.0",
   "private": true,
-  "description": "DrivoSafe — in-cab road-intelligence assistant for bus fleets",
+  "description": "DrivoSafe \u2014 in-cab road-intelligence assistant for bus fleets",
   "workspaces": [
     "shared",
     "app",
@@ -13,7 +13,8 @@
     "web": "npm run dev --workspace drivosafe-web",
     "web:build": "npm run build --workspace drivosafe-web",
     "native": "npm run start --workspace drivosafe-native",
-    "postinstall": "patch-package"
+    "postinstall": "patch-package",
+    "check": "node scripts/check-undefined.mjs && npm test"
   },
   "devDependencies": {
     "patch-package": "^8.0.1"
